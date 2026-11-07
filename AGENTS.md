@@ -1,5 +1,11 @@
 # Capri project preferences
 
+- Follow `CONTRIBUTING.md`, `docs/DEVELOPMENT.md` and `docs/RELEASING.md` for
+  branches, checks and releases. Preserve dirty work and existing history.
+  Shared work starts from development; Windows-only work from platform/windows.
+  Use PRs into long-lived branches. Never push, delete branches, rewrite history
+  or publish a release without explicit user authorization.
+
 - The user wants PC awareness enabled by default for all apps, including newly
   installed apps. Do not require maintaining an app allowlist or repeatedly
   requesting observation permission. Keep observation local and on demand or

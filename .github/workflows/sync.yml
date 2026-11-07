@@ -1,0 +1,47 @@
+name: Branch synchronization
+on:
+  workflow_dispatch:
+    inputs:
+      parent:
+        description: Parent to synchronize downward (main only after a hotfix)
+        type: choice
+        options: [development, main]
+        default: development
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: sync-${{ inputs.parent }}
+  cancel-in-progress: false
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PARENT: ${{ inputs.parent }}
+        with:
+          script: |
+            const parent = process.env.PARENT;
+            const child = {development: 'platform/windows', main: 'development'}[parent];
+            if (!child) throw new Error('Unsupported synchronization direction');
+            const repo = {...context.repo};
+            const comparison = await github.rest.repos.compareCommitsWithBasehead({
+              ...repo, basehead: `${child}...${parent}`
+            });
+            if (!comparison.data.ahead_by) {
+              core.info(`${child} already contains ${parent}`);
+              return;
+            }
+            const open = await github.rest.pulls.list({...repo, state: 'open', base: child,
+              head: `${repo.owner}:${parent}`});
+            const pr = open.data[0] || (await github.rest.pulls.create({...repo,
+              base: child, head: parent, title: `Synchronize ${parent} into ${child}`,
+              body: 'Downward synchronization. Merge with a merge commit after CI and review. '
+                + 'If created by Actions, close/reopen this PR to trigger CI. '
+                + 'Resolve conflicts on a temporary destination-based branch; never force-push.'})).data;
+            await core.summary.addLink('Review synchronization PR', pr.html_url).write();
+            const status = (await github.rest.pulls.get({...repo, pull_number: pr.number})).data;
+            if (status.mergeable === false) core.setFailed('Merge conflict: human resolution required. PR preserved.');
+            else if (status.mergeable === null) core.warning('Mergeability pending. Inspect the PR before merging.');
+            else core.info('PR ready for review and required checks. Nothing was merged.');
