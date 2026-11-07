@@ -11,7 +11,7 @@ const scratch = path.resolve(__dirname, '../../../work');
 fs.mkdirSync(scratch, { recursive: true });
 process.env.CAPRIGPT_TEST_PROFILE = fs.mkdtempSync(path.join(scratch, 'caprigpt-smoke-'));
 process.env.CAPRIGPT_CONNECTION_FILE = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'integration.json');
-let cognitiveProbe, proactiveProbe, reflectionProbe, cognitiveSchemaSeen = false, foregroundContext;
+let cognitiveProbe, proactiveProbe, reflectionProbe, actionsProbe, cognitiveSchemaSeen = false, foregroundContext, foregroundWorkspace;
 if (process.argv.includes('--cognitive-only')) {
   require('../src/main/native-windows').context = () => ({ foreground: { app: 'Code', title: 'Synthetic project' } });
   require('../src/main/native-windows').foregroundBounds = () => null;
@@ -19,6 +19,7 @@ if (process.argv.includes('--cognitive-only')) {
     ['cognitive-foundation', 'CognitiveFoundation', value => cognitiveProbe = value],
     ['proactive-conversation', 'ProactiveConversation', value => proactiveProbe = value],
     ['cognitive-reflection', 'ReflectionEngine', value => reflectionProbe = value],
+    ['action-agent', 'ActionAgent', value => actionsProbe = value],
   ]) {
     const module = require('../src/main/' + file), Original = module[key];
     module[key] = class extends Original { constructor(options) { super(options); capture(this); } };
@@ -36,6 +37,7 @@ if (process.argv.includes('--cognitive-only')) {
       return JSON.stringify({ speak: true, message: 'What kind of game would you like to build?' });
     }
     foregroundContext = this.context();
+    foregroundWorkspace = typeof this.workspace === 'function' ? this.workspace() : this.workspace;
     if (!/goal context probe/i.test(text)) assert.ok(this.history.some(row => row.content.includes('What kind of game')));
     delta?.('A platformer sounds fun.'); return 'A platformer sounds fun.';
   };
@@ -161,10 +163,51 @@ app.whenReady().then(async () => {
       for (let i = 0; i < 100 && !foregroundContext; i++) await pause(50);
       assert.deepEqual(foregroundContext.savedGoals, []);
       assert.match((await route('/goals delete 1')).text, /deleted/);
+      require('../src/main/config').save({ privacy: { memoryEnabled: true, memoryRecall: true } });
+      const alpha = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'alpha'), beta = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'beta');
+      fs.mkdirSync(alpha); fs.mkdirSync(beta);
+      await js('host.openMenu()');
+      let controls;
+      for (let i = 0; i < 100; i++) {
+        controls = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('settings.html'));
+        if (controls && !controls.webContents.isLoading() && await controls.webContents.executeJavaScript('document.documentElement.dataset.settingsReady === "true"')) break;
+        await pause(50);
+      }
+      assert.ok(controls);
+      let choose;
+      require('electron').dialog.showOpenDialog = () => new Promise(resolve => { choose = resolve; });
+      const selecting = controls.webContents.executeJavaScript('settingsHost.action("project-choose")');
+      for (let i = 0; i < 100 && !choose; i++) await pause(10);
+      assert.equal(typeof choose, 'function');
+      const probe = id => js(`host.chatSend({id:${id},messages:[{role:'user',content:'Goal context probe'}]})`);
+      assert.match((await probe(9001)).error, /Finish choosing/);
+      assert.match((await route('/goals add Wrong scope during selection')).text, /Finish choosing/);
+      choose({ canceled: false, filePaths: [alpha] });
+      assert.match((await selecting).message, /Selected project/);
+      await controls.webContents.executeJavaScript('document.querySelector("[data-page=connections]").click()');
+      assert.match(await controls.webContents.executeJavaScript('document.querySelector("#content").textContent'), /Working with alpha/);
+      controls.hide();
+      await route('/goals add Keep the project scoped');
+      await route('/project decision Preserve original animations');
+      await route('/project outcome Synthetic manual observation');
+      assert.equal((await probe(9002)).ok, true);
+      assert.equal(foregroundWorkspace, fs.realpathSync(alpha));
+      assert.equal(foregroundContext.currentProject.name, 'alpha');
+      assert.equal(foregroundContext.currentProject.notes.some(row => row.kind === 'reported-outcome'), true);
+      assert.equal(foregroundContext.savedGoals[0].text, 'Keep the project scoped');
+      actionsProbe.context.record('Synthetic alpha task', 'completed');
+      await route('/project open ' + beta);
+      assert.equal((await probe(9003)).ok, true);
+      assert.equal(foregroundWorkspace, fs.realpathSync(beta));
+      assert.deepEqual(foregroundContext.currentProject.notes, []);
+      assert.deepEqual(foregroundContext.savedGoals, []);
+      assert.deepEqual(foregroundContext.recentTasks.recentTasks, []);
+      const off = await controls.webContents.executeJavaScript('settingsHost.action("project-off")');
+      assert.equal(off.state.project, null);
       await route('/companion off');
       assert.equal(JSON.parse((await route('/companion status')).text).enabled, false);
       assert.equal(await proactiveProbe.run(), false);
-      console.log('PASS: Codex schema/no tools, reflection lock gate, persistent inquiry, proactive reply context, saved goals in foreground context, recall revocation, deletion and pause. Isolated profile, inference mocked.');
+      console.log('PASS: Codex schema/no tools, reflection lock gate, proactive reply context, durable goals/recall, project picker and selection race, scoped notes/goals/workspace, stale task clearing and control-room project controls. Isolated profile, inference mocked.');
       clearTimeout(limit); app.exit(0); return;
     }
     if (process.argv.includes('--tts-only')) {

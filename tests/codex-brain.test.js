@@ -58,6 +58,13 @@ function fixture(mode = 'reply') {
         this.onNotification('turn/started', { threadId: 'thread', turn: { id: 'turn' } });
         if (mode === 'wait') return { turn: { id: 'turn' } };
         setImmediate(async () => {
+          if (mode === 'verification') {
+            const item = { id: 'test-command', type: 'commandExecution', command: 'npm test', cwd: path.join(os.tmpdir(), 'selected-project'), status: 'completed', exitCode: 0 };
+            this.onNotification('item/completed', { threadId: 'old-thread', turnId: 'turn', item: { ...item, id: 'stale' } });
+            this.onNotification('item/completed', { threadId: 'thread', turnId: 'turn', item });
+            this.onNotification('item/completed', { threadId: 'thread', turnId: 'turn', item });
+            this.onNotification('item/started', { threadId: 'thread', turnId: 'turn', item: { ...item, id: 'not-completed' } });
+          }
           if (mode === 'approval' || mode === 'permission') {
             this.onNotification('item/started', { threadId: 'thread', turnId: 'turn', item: { id: 'command', type: 'commandExecution' } });
             await this.onRequest({ id: 90, method: mode === 'approval' ? 'item/commandExecution/requestApproval' : 'item/permissions/requestApproval',
@@ -89,6 +96,41 @@ test('brain streams, preserves history, isolates threads and disables inherited 
   const params = f.calls.find(c => c[0] === 'thread/start')[1];
   assert.equal(params.ephemeral, true); assert.equal(params.sandbox, 'read-only');
   assert.equal(params.config.mcp_servers.existing.enabled, false);
+});
+
+test('requested native work uses the selected workspace and journals deduplicated completed command receipts only', async () => {
+  const f = fixture('verification'), receipts = [], selected = path.join(os.tmpdir(), 'selected-project');
+  f.brain.systemTools = () => true;
+  f.brain.workspace = () => selected;
+  f.brain.onOutcome = value => receipts.push(value);
+  await f.brain.chat('Run the tests');
+  assert.equal(f.calls.find(row => row[0] === 'thread/start')[1].cwd, selected);
+  assert.deepEqual(receipts, [{ workspace: selected, cwd: selected, command: 'npm test', exitCode: 0 }]);
+  f.brain.onOutcome = async () => { throw Error('Journal unavailable'); };
+  assert.equal(await f.brain.chat('Run the tests again'), 'Hello');
+});
+
+test('a missing selected workspace fails before starting a Codex client', async () => {
+  const f = fixture(); f.brain.systemTools = () => true;
+  f.brain.workspace = () => { throw Error('Project folder unavailable'); };
+  await assert.rejects(f.brain.chat('Inspect this project'), /folder unavailable/);
+  assert.equal(f.client(), undefined); assert.equal(f.brain.busy, false);
+});
+
+test('large companion context stays valid JSON and retains project/goal records instead of slicing them', async () => {
+  const f = fixture();
+  f.brain.context = () => ({ externalCodexEvents: { sessions: [{ title: '旅'.repeat(20000) }] },
+    currentProject: { root: 'C:\\Selected', notes: [{ kind: 'decision', text: 'Keep the original animations' }] },
+    savedGoals: [{ text: 'Finish the project' }], recentConversation: [{ content: 'x'.repeat(20000) }],
+    capabilities: { available: true } });
+  await f.brain.chat('What is next?');
+  const input = f.calls.find(row => row[0] === 'turn/start')[1].input[0].text;
+  const raw = input.slice(input.indexOf('\n') + 1, input.indexOf('\n\n'));
+  const data = JSON.parse(raw);
+  assert.equal(data.currentProject.root, 'C:\\Selected');
+  assert.equal(data.savedGoals[0].text, 'Finish the project');
+  assert.ok(data.omittedContextFields.includes('externalCodexEvents'));
+  assert.ok(Buffer.byteLength(raw) <= 16000);
 });
 test('tool requests execute once and reject stale turn IDs', async () => {
   const f = fixture('tool'); await f.brain.chat('What is open?');

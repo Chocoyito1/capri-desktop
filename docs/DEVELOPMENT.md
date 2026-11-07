@@ -1,5 +1,17 @@
 # Branches and integration
 
+## Local transition completed (2026-11-07)
+
+The existing process work and current application snapshot were deliberately
+saved as separate commits on `codex/caprigpt-local` (`c08ad43`, `a1a388e`). The
+machine-specific `.codex/config.toml` remains local and untracked. Local
+`development` now exists at the documented `3095c18` baseline. Shared work branch
+`feature/project-companion` was created from development, then fast-forwarded to
+the saved application snapshot before implementing project context. The feature
+branch targets development through a PR. This does not advance main or establish
+a stable release. The historical starting-point notes below describe the earlier
+read-only session; platform/windows remains to be established when needed.
+
 ## Starting point (2026-11-06)
 
 The inspected checkout is `codex/caprigpt-local` at `3095c18`, 17 commits ahead

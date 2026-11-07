@@ -1,9 +1,14 @@
 # CapriGPT — Codex desktop agent (development)
 
-Capri now uses Codex CLI for requested work and an event-driven, read-only observer
-for proactive conversation. Foreground tasks can use Codex command/file/web tools,
+Capri now uses Codex CLI for requested work and tool-free background reasoning
+for companion conversations and private inquiry. Foreground tasks can use Codex command/file/web tools,
 configured CLI connections, actual screen snapshots and native desktop input.
 Normal social dialogue is generated from her personality and current context.
+
+Choose a workspace in **Control room → Connections → Project companion**.
+[Project companion](docs/PROJECT-COMPANION.md) keeps project goals, decisions and
+reported outcomes separate, and can save recognized command-exit receipts when
+Memory is enabled. Selecting a folder does not start work or approve actions.
 
 See [AGENT-PRESENCE.md](docs/AGENT-PRESENCE.md) for implemented behavior, screen/cloud
 data flow, controls, limits and validation. This is an unreleased implementation;

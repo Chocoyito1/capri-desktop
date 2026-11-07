@@ -47,6 +47,7 @@ const { WorldState } = require('./world-state');
 const capabilities = require('./capabilities');
 let memoryStore, goalStore, autonomy, reflection, curiosity;
 let sessionAvailable = true;
+let projectRouting = false;
 // A spoken wake address temporarily permits requested foreground work, not background actions.
 let voiceSession = false;
 const agentConfig = () => voiceSession ? { ...config.load(), gamingMode: false } : config.load();
@@ -62,6 +63,11 @@ const pcContext = new ContextService({ settings: () => config.load() });
 const goals = () => {
   if (!goalStore) goalStore = new CompanionGoals({
     file: path.join(app.getPath('userData'), 'companion-goals.sqlite'), settings: () => config.load(),
+    choose: async () => {
+      const result = await dialog.showOpenDialog({ title: 'Choose Capri’s project folder', properties: ['openDirectory'] });
+      return result.canceled ? null : result.filePaths[0];
+    },
+    confirm: confirmMemory,
   });
   return goalStore;
 };
@@ -148,10 +154,14 @@ const screenAccess = new ScreenAccess({ settings: agentConfig,
     return { url: `data:image/jpeg;base64,${source.thumbnail.toJPEG(65).toString('base64')}`, ...size };
   },
 });
-const currentContext = () => ({ presentation, capabilities: capabilities.registry(agentConfig()), externalCodexEvents: codexEvents.snapshot(),
-  savedGoals: permissions(agentConfig().privacy).memoryEnabled ? goals().context() : [],
+const currentContext = () => {
+  const p = permissions(agentConfig().privacy);
+  const savedGoals = p.memoryEnabled ? goals().context() : [];
+  return { presentation, capabilities: capabilities.registry(agentConfig()), externalCodexEvents: codexEvents.snapshot(),
+  savedGoals, currentProject: goals().projects.context(Math.max(0, p.promptBudget - Buffer.byteLength(JSON.stringify(savedGoals)))),
   recentTasks: actions.grounding({ includeApps: false }),
-  recentConversation: brain?.history?.slice(-6) || [] });
+  recentConversation: brain?.history?.slice(-6) || [] };
+};
 const brainTools = new CodexTools({ settings: agentConfig, context: pcContext, screen: screenAccess,
   body: (action, { check, signal }) => new Promise((resolve, reject) => {
     check(); if (!overlay || overlay.isDestroyed() || config.load().gamingMode) return reject(Error('Capri’s body is unavailable.'));
@@ -165,7 +175,8 @@ const brainTools = new CodexTools({ settings: agentConfig, context: pcContext, s
   actions, store: memory, state: settingsState, patch: updateConfig, confirm: confirmMemory });
 const brain = new CodexBrain({ settings: agentConfig,
   cwd: path.join(app.getPath('temp'), 'caprigpt-codex-brain'), tools: brainTools,
-  systemTools: () => config.load().systemAccess === true, workspace: app.getPath('home'), context: currentContext,
+  systemTools: () => config.load().systemAccess === true, workspace: () => goals().projects.workspace() || app.getPath('home'), context: currentContext,
+  onOutcome: receipt => goals().projects.recordVerification(receipt),
   approve: async (message, { text, signal, item }) => {
     signal.throwIfAborted();
     const p = message.params;
@@ -529,6 +540,7 @@ function updateConfig(patch) {
 function settingsState() {
   return { config: { ...rendererConfig(), privacy: permissions(config.load().privacy) },
     runtime: runtime(), integration: codexEvents.snapshot(),
+    project: goals().projects.selected(),
     startup: app.getLoginItemSettings(loginItemOptions()).openAtLogin,
     displays: screen.getAllDisplays().map(d => ({ id: d.id, width: d.size.width, height: d.size.height })) };
 }
@@ -539,6 +551,20 @@ function rebuildTray() {
 }
 
 function openSettings() { settingsRoom?.open(); }
+
+async function projectCommand(text) {
+  if (projectRouting || brain.busy || actions.busy || chats.size)
+    return { handled: true, text: 'Finish or stop the current request before changing project context.' };
+  projectRouting = true;
+  try {
+    autonomy.touch();
+    const previousScope = goals().projects.scope();
+    const result = await goals().projects.route(text);
+    if (goals().projects.scope() !== previousScope) actions.context?.clear();
+    brain.reset(); settingsRoom?.update();
+    return result;
+  } finally { projectRouting = false; }
+}
 
 async function settingsAction(name, value) {
   switch (name) {
@@ -551,6 +577,8 @@ async function settingsAction(name, value) {
     case 'memory-export': return (await personal.route('/memory export')).text;
     case 'memory-delete': { autonomy.touch(); const result = await personal.route('/memory delete-all'); brain.reset(); return result.text; }
     case 'memory-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing memory.'); sendCommand('memory'); break;
+    case 'project-choose': return (await foreground.run(() => projectCommand('/project choose'))).text;
+    case 'project-off': return (await foreground.run(() => projectCommand('/project off'))).text;
     case 'refresh': return runtime().currentSource ? 'Current local source is loaded.' : 'Local changes found. Restart Capri to load them.';
     case 'restart': app.relaunch(); app.quit(); break;
     case 'quit': app.quit(); break;
@@ -619,6 +647,10 @@ function registerIpc() {
       if (event.sender !== overlay?.webContents) throw Error('Overlay required.');
       if (typeof text !== 'string' || text.length > 12000) throw Error('Invalid message.');
       autonomy.touch();
+      if (projectRouting) return { handled: true, text: 'Finish choosing your project before sending a request.' };
+      if (/^\/project(?:\s|$)/i.test(text.trim())) {
+        return await projectCommand(text);
+      }
       const goalCommand = /^\/goals(?:\s|$)/i.test(text.trim()) ? goals().route(text) : null;
       if (goalCommand) { brain.reset(); return goalCommand; }
       const companion = /^\/companion(?:\s+(on|off|status))?$/i.exec(text.trim());
@@ -692,6 +724,7 @@ function registerIpc() {
     const { id, messages } = request || {};
     const current = messages?.at(-1);
     if (!Number.isSafeInteger(id) || current?.role !== 'user' || typeof current.content !== 'string') return { ok: false, error: 'Invalid chat request.' };
+    if (projectRouting) return { ok: false, error: 'Finish choosing your project before sending a request.' };
     if (chats.size || brain.busy || actions.busy) return { ok: false, error: 'One Capri request at a time.' };
     const abort = new AbortController();
     let finish;

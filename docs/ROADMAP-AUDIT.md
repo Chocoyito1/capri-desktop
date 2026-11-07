@@ -1,5 +1,11 @@
 # Capri roadmap implementation audit — 2026-11-07
 
+Follow-up: the core project companion is now implemented. See
+[PROJECT-COMPANION.md](PROJECT-COMPANION.md) for selected workspaces, scoped goals,
+user-authored decisions, reported outcomes and observed command-exit receipts.
+The original audit below records the starting implementation, not the follow-up
+feature's final status. Dependable project recall and daily review remain next.
+
 Audited the current Windows checkout, including its substantial pre-existing
 uncommitted changes, against the nine features in “Capri Roadmap Functions”.
 No branch switch, staging, commit, push, release or live companion restart was

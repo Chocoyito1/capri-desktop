@@ -8,7 +8,9 @@ Neither path uses Qwen or Ollama for inference.
 Foreground conversations enable Codex's native command execution, file and image
 tools, live web search and the CLI's configured connections/skills, rather than
 forcing those capabilities off. The default working directory is the user's home
-folder, with Codex's workspace-write sandbox and on-request human approval.
+folder unless a project is selected, with Codex's workspace-write sandbox and
+on-request human approval. [Project companion](PROJECT-COMPANION.md) explains
+folder selection, scoped goals, decisions and command-exit receipts.
 Additional filesystem/network permission requests are reviewed in Capri and
 granted only for that turn. The app does not grant administrator rights or bypass
 Windows protection. Installed Codex connections are distinct from this ChatGPT
