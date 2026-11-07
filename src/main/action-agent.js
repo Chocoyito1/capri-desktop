@@ -2,30 +2,43 @@
 const {randomBytes}=require('node:crypto');
 const {AGENT_MODEL,registry}=require('./capabilities');
 const {TaskContext}=require('./task-context');
-const TOOLS=['open_app','youtube_latest','play_video','search_web','search_news','steam_deals','open_result'];
+const {publicUrl}=require('./web-tools');
+const TOOLS=['open_app','open_url','youtube_latest','play_video','search_web','search_news','steam_deals','open_result'];
 const PLAN_SCHEMA={type:'object',additionalProperties:false,required:['message','steps'],properties:{
   message:{type:'string',maxLength:400},steps:{type:'array',maxItems:4,items:{type:'object',additionalProperties:false,
-    required:['tool','query','index'],properties:{tool:{type:'string',enum:TOOLS},query:{type:'string',maxLength:300},index:{type:'integer',minimum:0,maximum:5}}}},
+    required:['tool','query','index'],properties:{tool:{type:'string',enum:TOOLS},query:{type:'string',maxLength:300},index:{type:'integer',minimum:0,maximum:5},browser:{type:'string',maxLength:80},goalIndex:{type:'integer',minimum:0,maximum:3}}}},
 }};
 function validatePlan(value, existingType=null) {
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['message','steps'].includes(k))
     ||typeof value.message!=='string'||value.message.length>400||!Array.isArray(value.steps)||value.steps.length>4)throw Error('Invalid task plan. Nothing executed.');
-  for(const s of value.steps)if(!s||Object.keys(s).some(k=>!['tool','query','index'].includes(k))||!TOOLS.includes(s.tool)||typeof s.query!=='string'||s.query.length>300||!Number.isInteger(s.index)||s.index<0||s.index>5)throw Error('Invalid tool call. Nothing executed.');
+  for(const s of value.steps)if(!s||Object.keys(s).some(k=>!['tool','query','index','browser','goalIndex'].includes(k))||!TOOLS.includes(s.tool)||typeof s.query!=='string'||s.query.length>300||!Number.isInteger(s.index)||s.index<0||s.index>5
+    ||(s.goalIndex!==undefined&&(!Number.isInteger(s.goalIndex)||s.goalIndex<0||s.goalIndex>3))
+    ||(s.browser!==undefined&&(typeof s.browser!=='string'||s.browser.length>80||!['open_url','open_result'].includes(s.tool))))throw Error('Invalid tool call. Nothing executed.');
   let available=existingType;
   const used=new Set();
   for(const s of value.steps) {
     const key=JSON.stringify(s);
     if(used.has(key))throw Error('Duplicate tool calls are not allowed in one task.');used.add(key);
     if(['open_app','search_web','search_news','youtube_latest'].includes(s.tool)&&!s.query.trim())throw Error('Tool query missing.');
+    if(s.tool==='open_url')publicUrl(s.query);
     if(s.tool==='play_video'&&available!=='youtube_latest')throw Error('A video must be found before playback.');
     if(s.tool==='open_result'&&!['search_web','search_news','steam_deals','youtube_latest'].includes(available))throw Error('A page must be found before opening it.');
     if(['search_web','search_news','steam_deals','youtube_latest'].includes(s.tool))available=s.tool;
   }
   return value;
 }
-function authorizePlan(goal,plan) {
+function authorizePlan(goal,plan,{semantic=false}={}) {
   const text=goal.normalize('NFD').replace(/\p{M}/gu,'');
-  if(/\b(?:don['’]?t|do not|never)\s+(?:open|launch|start|play|watch)|\bno\s+(?:abras|inicies|reproduzcas)\b/i.test(text)&&plan.steps.some(s=>['open_app','play_video','open_result'].includes(s.tool)))throw Error('The request says not to perform that action.');
+  if(/\b(?:don['’]?t|do not|never)\s+(?:open|launch|start|play|watch)|\bno\s+(?:abras|inicies|reproduzcas)\b/i.test(text)&&plan.steps.some(s=>['open_app','open_url','play_video','open_result'].includes(s.tool)))throw Error('The request says not to perform that action.');
+  for(const step of plan.steps)if(step.tool==='open_url') {
+    const target=publicUrl(step.query);
+    const supplied=(goal.match(/(?:https:\/\/|www\.)[^\s<>"']+|\b[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[^\s<>"']*)?/gi)||[])
+      .some(raw=>{try{return publicUrl(raw.startsWith('https://')?raw:'https://'+raw)===target;}catch{return false;}});
+    if(!supplied)throw Error('Find the website with search first; do not invent a URL.');
+  }
+  // The semantic interpreter distinguishes actual requests from discussion.
+  // These are still only the preinstalled, validated, low-impact tools.
+  if(semantic)return;
   if(plan.steps.some(s=>s.tool==='open_app')&&!/\b(open|launch|start|abre|abrir|inicia)\b/i.test(text))throw Error('Opening an app needs an explicit request.');
   if(plan.steps.some(s=>s.tool==='play_video')&&!/\b(play|watch|reproduce|pon|ver)\b/i.test(text))throw Error('Playback needs an explicit request.');
   if(plan.steps.some(s=>s.tool==='open_result')&&!/\b(open|show|browse|watch|search|find|check|look for|look up|what|which|abre|abrir|muestra|ver|busca|buscar|encuentra|que|cuales|revisa)\b/i.test(text))throw Error('Opening a source needs a browsing or research request.');
@@ -50,7 +63,7 @@ function actionIntent(text) {
   return (verb||freshQuestion)&&target;
 }
 function formatResult(result) {
-  if(result.type==='app')return result.note;
+  if(result.type==='app'||result.type==='website')return result.note;
   if(result.type==='playback')return result.playing?`Playing “${result.title}” from ${result.channel}.`:`Opened “${result.title}” from ${result.channel}. ${result.note}`;
   if(result.type==='opened')return result.redirected?'The source redirected to another site. Check Capri Browser before continuing.':`Opened ${result.title || 'the requested page'} in Capri Browser.`;
   if(result.type==='steam')return `Current featured Steam discounts (Guatemala store):\n${result.items.map(i=>`${i.title}: −${i.discount}% · ${i.price.toFixed(2)} ${i.currency}`).join('\n')}\nThese are featured specials, not a ranking of every Steam deal. Prices can change.`;
@@ -68,8 +81,13 @@ class ActionAgent {
   cancel(){this.abort?.abort();this.browser.stop?.();this.context.interrupt();}
   launchName(text) {
     if(typeof text!=='string')return null;
+    const explicit=/^\/do\s+/i.test(text);
     const command=text.replace(/^\/do\s+/i,'').trim();
-    return this.desktop.matchName?.(launchTarget(command)||command)||null;
+    const target=launchTarget(command);
+    // A question about an app is not a launch shorthand, except as an answer
+    // to the existing app-choice prompt.
+    if(!target&&!explicit&&/\?\s*$/.test(command)&&!this.context.snapshot().pending)return null;
+    return this.desktop.matchName?.(target||command)||null;
   }
   contextualLaunch(text) {
     if(typeof text!=='string'||text.length>2000)return null;
@@ -129,9 +147,9 @@ class ActionAgent {
     if(!actionIntent(text)&&!followup) {if(!/^(thanks|thank you|okay|ok|great|cool|gracias)[.!\s]*$/i.test(text))this.context.interrupt();return null;}
     return this.run(text.replace(/^\/do\s+/i,''),id);
   }
-  async run(goal,id,directApp=null) {
+  async run(goal,id,directApp=null,options={}) {
     if(!this.enabled())return {handled:true,text:'Resume Capri from gaming mode before asking me to act.'};
-    if(this.busy||!this.idle())return {handled:true,text:'I’m already working on something. Close the current chat task to stop it, or try again shortly.'};
+    if(this.busy||(!options.fromBrain&&!this.idle()))return {handled:true,text:'I\'m already working on something. Close the current chat task to stop it, or try again shortly.'};
     if(typeof goal!=='string'||!goal.trim()||goal.length>2000)return {handled:true,text:'Use a task up to 2000 characters.'};
     this.busy=true;this.abort=new AbortController();let finish;
     this.done=new Promise(resolve=>{finish=resolve;});
@@ -144,7 +162,8 @@ class ActionAgent {
     try {
       tell('Planning your task…');
       // Common local launch stays instant; broader requests use the local planner.
-      if(directApp)plan={message:'',steps:[{tool:'open_app',query:directApp,index:0}]};
+      if(options.plan)plan=options.plan;
+      else if(directApp)plan={message:'',steps:[{tool:'open_app',query:directApp,index:0}]};
       else if(/^(?:capri[,\s]+)?(?:please\s+)?(?:open|launch|abre)\s+(?:the\s+)?(?:file explorer|explorer|explorador de archivos)[.!\s]*$/i.test(goal))plan={message:'',steps:[{tool:'open_app',query:'File Explorer',index:0}]};
       else {
         if(!(await this.models()).includes(AGENT_MODEL))throw Error('Download local qwen3.5:9b before using action planning.');check();
@@ -158,7 +177,7 @@ class ActionAgent {
         plan=validatePlan(JSON.parse(raw),existingType);check();
       }
       validatePlan(plan,existingType);
-      authorizePlan(goal,plan);
+      authorizePlan(goal,plan,options);
       if(!plan.steps.length){this.context.record(goal,'unsupported');return {handled:true,text:plan.message||'That needs a tool I haven’t learned yet.'};}
       this.context.pending=null;
       let lastFound=previous;
@@ -166,12 +185,13 @@ class ActionAgent {
         check();let result;
         switch(step.tool) {
           case 'open_app':tell(`Opening ${step.query}…`);result=await this.desktop.open(step.query,signal);break;
+          case 'open_url':tell('Opening the requested website…');result=await this.desktop.openUrl(step.query,step.browser||'default',signal);break;
           case 'youtube_latest':tell(`Checking ${step.query}’s newest upload…`);result=await this.web.youtube(step.query,signal);lastFound=result;break;
           case 'search_web':tell('Searching the web…');result=await this.web.search(step.query,{signal});lastFound=result;break;
           case 'search_news':tell('Checking fresh headlines…');result=await this.web.search(step.query,{news:true,signal});lastFound=result;break;
           case 'steam_deals':tell('Checking live Steam discounts…');result=await this.web.steam(signal);lastFound=result;break;
           case 'play_video':if(!lastFound?.items[step.index]?.videoId)throw Error('No verified video was found to play.');tell('Opening the video and checking playback…');result={...await this.browser.play(lastFound.items[step.index],signal),type:'playback'};break;
-          case 'open_result':if(!lastFound?.items[step.index])throw Error('The requested result is unavailable.');tell('Opening the source…');result={...await this.browser.open(lastFound.items[step.index].url,signal),type:'opened',title:lastFound.items[step.index].title};break;
+          case 'open_result':if(!lastFound?.items[step.index])throw Error('The requested result is unavailable.');tell('Opening the source…');result=step.browser?await this.desktop.openUrl(lastFound.items[step.index].url,step.browser,signal):{...await this.browser.open(lastFound.items[step.index].url,signal),type:'opened',title:lastFound.items[step.index].title};break;
         }
         check();results.push(result);
       }
@@ -183,13 +203,13 @@ class ActionAgent {
       for(const [key,item] of this.results)if(item.expires<this.now())this.results.delete(key);
       while(this.results.size>50)this.results.delete(this.results.keys().next().value);
       const text=results.filter(result=>result.type!=='youtube'||!results.some(r=>r.type==='playback')).map(formatResult).filter(Boolean).join('\n\n');
-      this.context.record(goal,'completed',results,plan.steps.some(step=>step.tool==='open_app')?'app-launch':'task');
-      return {handled:true,task:true,text,links:links.slice(0,6)};
+      this.context.record(goal,options.semantic?'step-completed':'completed',results,options.semantic?'tool-step':plan.steps.some(step=>step.tool==='open_app')?'app-launch':'task');
+      return {handled:true,task:true,text,links:links.slice(0,6),observations:results,completed:true};
     } catch(error) {
       if(signal.aborted)this.browser.stop?.();
       const completed=results.map(formatResult).filter(Boolean);
       this.context.record(goal,signal.aborted?'cancelled':'failed',results,directApp?'app-launch':'task');
-      return {handled:true,task:true,text:[...completed,signal.aborted?'Task stopped. Any app or page already opened may remain open.':`I couldn’t finish that task: ${error.message}`].join('\n')};
+      return {handled:true,task:true,completed:false,text:[...completed,signal.aborted?'Task stopped. Any app or page already opened may remain open.':`I couldn’t finish that task: ${error.message}`].join('\n')};
     } finally {this.busy=false;this.abort=null;finish();}
   }
   async openResult(ref) {

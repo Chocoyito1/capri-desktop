@@ -15,13 +15,14 @@ const THINK_SAY = 40000;
 const THINK_LONG = 120000;
 
 export class Brain {
-  constructor({ capri, panel, voice, host, mission, lang = 'fr' }) {
+  constructor({ capri, panel, voice, host, mission, lang = 'fr', generatedDialogue = false }) {
     this.capri = capri;
     this.panel = panel;
     this.voice = voice;
     this.host = host;
     this.mission = mission; // today's log, for her report card (mission.js)
     this.lang = lang;
+    this.generatedDialogue = generatedDialogue;
     this.sessions = new Map();
     this.replyFor = null;    // the session whose answer she's holding up for you
     this.linked = true;      // has a Claude Code event ever reached her (app.js sets it from the config)
@@ -54,6 +55,10 @@ export class Brain {
   }
 
   say(kind, line, s, extra = {}) {
+    if (this.generatedDialogue) {
+      if (!['alert', 'error', 'report'].includes(kind)) { this.host.companionEvent?.('external-task'); return true; }
+      line = extra.quote || extra.reply || extra.report?.date || (kind === 'alert' ? 'Approval required' : kind === 'error' ? 'Task failed' : 'Activity report');
+    }
     return this.panel.say({ kind, line, tag: s ? s.title || s.project : '', ...extra });
   }
 
@@ -327,6 +332,7 @@ export class Brain {
 
   // What she says when you click her. Nothing going on: she offers to talk (chat.js).
   status() {
+    if (this.generatedDialogue) { this.onTalk?.(); return; }
     const integration = this.integrationStatusMessage?.();
     if (integration) {
       this.panel.say(integration);

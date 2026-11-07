@@ -1,4 +1,6 @@
+import { SpeechPlayer } from './speech-output.js';
 import { Capri } from './capri.js';
+import { Companion } from './companion.js';
 import { FxLayer, GRAB_FRAMES } from './fx.js';
 import { Chip, Mask } from './chip.js';
 import { Panel } from './panel.js';
@@ -6,9 +8,11 @@ import { Voice } from './voice.js';
 import { Brain } from './brain.js';
 import { Mission } from './mission.js';
 import { Chat } from './chat.js';
+import { TalkMenu } from './talk-menu.js';
 import { IntegrationCompanion } from './integration.js';
 import { FullscreenPresence } from './fullscreen-presence.js';
 import { Dictation } from './dictation.js';
+import { WakeListener } from './wake-listener.js';
 import { LINES } from './lines.js';
 import { pick } from './util.js';
 
@@ -71,28 +75,37 @@ async function boot() {
   capri.possessWindows = config.possess;
   capri.gaming = Boolean(config.gamingMode);
   capri.setScale(config.scale);
+  let companionStorage;
+  try { companionStorage = window.localStorage; } catch {}
+  capri.companion = new Companion({ capri, host, storage: companionStorage });
+  capri.companion.configure(config);
 
   const mission = new Mission();
-  const brain = new Brain({ capri, panel, voice, host, mission, lang: config.lang });
+  const brain = new Brain({ capri, panel, voice, host, mission, lang: config.lang, generatedDialogue: config.generatedDialogue !== false });
   new IntegrationCompanion({ capri, panel, voice, host, brain });
 
   // Click-through everywhere except on her body, the panel and her biochip.
+  let talkMenu, wakeListener;
   let interactive = false;
   let mouse = null;
-  const setInteractive = (on) => {
-    if (on === interactive) return;
+  let pointerRevision = 0;
+  const setInteractive = (on, force = false) => {
+    if (!force && on === interactive) return;
     interactive = on;
     host.setInteractive(on);
   };
   const onChip = () => Boolean(chip.visible && mouse && chip.contains(mouse.x, mouse.y, 0));
-  const refreshHit = () => {
-    if (capri.fullscreen) return setInteractive(false);
-    if (capri.dragging) return setInteractive(true);
-    if (!mouse) return setInteractive(false);
+  const refreshHit = (force = false) => {
+    if (capri.fullscreen && !wakeListener?.session) return setInteractive(false, force);
+    if (capri.pointerHeld || capri.dragging) return setInteractive(true, force);
+    if (!mouse) return setInteractive(false, force);
     const r = panel.rect();
     const onPanel = r && mouse.x >= r.left && mouse.x <= r.right && mouse.y >= r.top && mouse.y <= r.bottom;
+    const indicator = document.getElementById('wake-indicator');
+    const ir = !indicator.hidden && indicator.getBoundingClientRect();
+    const onWakeIndicator = ir && mouse.x >= ir.left && mouse.x <= ir.right && mouse.y >= ir.top && mouse.y <= ir.bottom;
     document.body.style.cursor = onChip() ? 'pointer' : '';
-    return setInteractive(Boolean(onPanel || capri.hit(mouse.x, mouse.y) || onChip()));
+    return setInteractive(Boolean(onPanel || onWakeIndicator || talkMenu?.contains(mouse.x, mouse.y) || capri.hit(mouse.x, mouse.y) || onChip()), force);
   };
   // Her biochip: her eyes on it follow the pointer over it, and she comes out when you click it
   // (only then, so the pointer passing through that corner doesn't call her back).
@@ -117,11 +130,13 @@ async function boot() {
     }
   };
   window.addEventListener('mousemove', (e) => {
+    pointerRevision++;
     mouse = { x: e.clientX, y: e.clientY };
     refreshHit();
     hoverChip();
   });
   document.addEventListener('mouseleave', () => {
+    pointerRevision++;
     mouse = null;
     refreshHit();
     hoverChip();
@@ -135,15 +150,18 @@ async function boot() {
   });
 
   // wiring
+  capri.onPointerHold = () => refreshHit();
   capri.onMove = (head) => {
     // pointing at something: the panel goes on her other side, so it doesn't cover it
     panel.setAnchor({ ...head, lean: capri.pointing ? -capri.pointing.dir : 0 }, capri.view);
+    talkMenu?.place(head, capri.view);
     // she may have moved out from under a still pointer: never leave a dead click zone behind
     refreshHit();
   };
-  capri.onTeleport = (phase) => (phase === 'start' ? panel.suspend() : panel.resume());
+  capri.onTeleport = (phase) => { if (wakeListener?.session) return; if (phase === 'start') talkMenu?.hide(); return phase === 'start' ? panel.suspend() : panel.resume(); };
   capri.chipAt = () => chip.center();
   capri.onStow = () => {
+    talkMenu?.hide();
     chip.setMode(capri.mode);
     chip.show();
   };
@@ -161,23 +179,62 @@ async function boot() {
   capri.onMode = (mode, prev) => chip.setMode(mode, prev);
   // now and then she says something about the satellite: while she looks at it, or once
   // the red light has gone up (never during, nothing should cover that)
-  capri.onGaze = (when) => {
-    const lines = when === 'end' ? brain.t.uplink : brain.t.gaze;
-    if (!panel.visible && Math.random() < (when === 'end' ? 0.6 : 0.4)) panel.say({ kind: 'info', line: pick(lines), hold: 3800 });
-  };
+  capri.onGaze = () => host.companionEvent?.('idle');
   capri.onClick = () => {
     if (panel.visible) panel.hide();
-    else brain.status();
+    talkMenu?.toggle();
   };
-  panel.onChar = (kind) => voice.play('blip', { mood: kind });
-  panel.onTalk = (talking) => talking && capri.perform('talk');
+  panel.onChar = (kind) => { if (!voice.spoken?.config?.ttsEnabled) voice.play('blip', { mood: kind }); };
+  panel.onTalk = (talking) => talking && capri.mode !== 'sleep'
+    && !capri.act?.player.name.startsWith('idle') && capri.perform('talk');
   panel.onFocus = () => host.focusOverlay(true); // Restore typing after a fullscreen exit, only on a user click.
   capri.onMenu = () => host.openMenu();
 
+  voice.spoken = new SpeechPlayer({ host, voice,
+    onLevel: level => {
+      capri.speechLevel = level;
+      if (level > 0.015 && !capri.act && capri.mode !== 'sleep') capri.perform('talk');
+    },
+    onError: error => { const status = panel.el.querySelector('.panel__dictation-status'); status.textContent = `Voice: ${error}`; status.hidden = false; },
+  });
+  voice.spoken.configure(config);
+  host.onFullscreenState(state => { if (state.active && !wakeListener?.session) voice.spoken.stop(); });
   const chat = new Chat({ capri, panel, voice, host, brain });
+  capri.onIdleWave = () => {}; // A wave is an animation; speech comes from Codex.
+  const publishCompanionState = () => host.companionState?.({ mood: capri.companion.mood,
+    routine: capri.companion.options.dailyRoutine ? (new Date().getHours() < 6 ? 'night' : new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening') : '',
+    chatOpen: chat.open, canSpeak: !wakeListener?.session && !talkMenu?.visible && !capri.busy && capri.mode !== 'alert' && !['alert', 'error', 'report'].includes(panel.current?.kind) });
+  setInterval(publishCompanionState, 15000);
+  host.onBodyAction?.(async ({ id, action }) => {
+    let result;
+    try { result = action === 'sit' || action === 'stand' ? await capri.requestPosture(action === 'sit') : await capri.companion.request(action); }
+    catch (error) { result = `Action failed: ${error.message}`; }
+    host.bodyResult({ id, result }); publishCompanionState();
+  });
   const dictation = new Dictation({ panel, host, language: () => brain.lang,
-    canListen: () => chat.open && !capri.gaming && !capri.fullscreen });
-  brain.onTalk = () => chat.start();
+    canListen: () => chat.open && (!capri.gaming && !capri.fullscreen || wakeListener?.session),
+    beforeStart: async () => wakeListener?.pause() });
+  talkMenu = new TalkMenu({ el: document.getElementById('talk-menu'), capri, host,
+    language: () => brain.lang, onChange: () => refreshHit(),
+    onChoose: async (mode, greeting) => {
+      await chat.start(false, greeting, { mode });
+      if (mode === 'voice' && chat.open && !chat.turn) await dictation.toggle();
+    } });
+  brain.onTalk = () => { talkMenu.hide({ keepFocus: true }); return chat.start(); };
+  wakeListener = new WakeListener({ host, indicator: document.getElementById('wake-indicator'),
+    blocked: () => Boolean(dictation.id || voice.spoken.pending || voice.spoken.source),
+    onSessionEnd: () => { document.body.classList.remove('voice-session'); refreshHit(true); },
+    onWake: async event => {
+      talkMenu.hide({ keepFocus: true }); voice.spoken.stop();
+      if (chat.turn) panel.hide();
+      document.body.classList.add('voice-session'); panel.resume();
+      await chat.start(false, brain.lang === 'es' ? 'Te escucho.' : "I'm listening.", { voiceWake: true });
+      if (!chat.open || chat.turn) throw Error('Conversation is unavailable.');
+      dictation.adoptWake(event); refreshHit(true);
+    } });
+  chat.onClose = () => { if (!panel.leaving && !wakeListener.transferring) wakeListener.endSession(); };
+  panel.onHidden = () => { if (!chat.open && !wakeListener.transferring) wakeListener.endSession(); };
+  wakeListener.configure(config);
   // The demo's second half, after its fake Claude session: everything she does on her own, one
   // after the other, a line before each.
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -253,14 +310,44 @@ async function boot() {
   };
 
   host.onAgentSuggestion(text => {
-    if (!chat.open && typeof text === 'string') panel.say({ kind: 'info', face: 'look', line: text, hold: 8000 });
+    if (wakeListener.session) return;
+    if (typeof text !== 'string' || capri.gaming || capri.fullscreen || chat.turn || talkMenu.visible) return;
+    if (chat.open) panel.stream(text, { done: true });
+    else if (panel.visible && ['alert', 'error', 'report'].includes(panel.current?.kind)) return;
+    else panel.say({ kind: 'info', face: 'look', line: text, hold: 10000 });
+    voice.spoken?.speak(text);
+  });
+  host.onConversation?.(text => {
+    if (wakeListener.session || chat.open || panel.visible || talkMenu.visible || capri.gaming || capri.fullscreen ||
+        typeof text !== 'string' || text.length > 320) return;
+    const es = brain.lang === 'es';
+    panel.say({ kind: 'info', face: 'look', line: text, hold: 20000,
+      actions: [{ id: 'reply', label: es ? 'Responder' : 'Reply', primary: true },
+        { id: 'quiet', label: es ? 'Silenciar charlas' : 'Pause check-ins' }],
+      onAction: async id => {
+        voice.spoken?.stop(); panel.hide();
+        if (id === 'reply') await chat.start(false, text);
+        if (id === 'quiet') await host.personalRoute('/companion off');
+      },
+    });
+    voice.spoken?.speak(text);
   });
   new FullscreenPresence({ capri, host, onChange: () => {
-    refreshHit();
-    if (capri.fullscreen) dictation.cancel();
+    const revision = ++pointerRevision;
+    // Main can override click-through during a transition; resend even when
+    // the renderer cache thinks nothing changed, including rapid reversals.
+    refreshHit(true);
+    if (capri.fullscreen) { talkMenu.hide(); if (!dictation.fromWake) dictation.cancel(); }
+    else if (!capri.gaming) host.cursor().then(cursor => {
+      if (revision !== pointerRevision || capri.fullscreen || capri.gaming) return;
+      mouse = cursor?.inside ? { x: cursor.x, y: cursor.y } : null;
+      refreshHit(true);
+      hoverChip();
+    }).catch(() => {});
   } });
   host.onWindows((data) => {
     capri.setWindows(data);
+    capri.companion.desktop(data);
     brain.onWindows(data);
   });
   // the windows as they are now: the watcher only speaks again when something changes
@@ -278,9 +365,12 @@ async function boot() {
   });
 
   host.onConfig((cfg) => {
+    capri.companion.configure(cfg);
+    wakeListener.configure(cfg);
     voice.configure(cfg);
+    voice.spoken.configure(cfg);
     capri.gaming = Boolean(cfg.gamingMode);
-    if (capri.gaming || cfg.visible === false) dictation.cancel();
+    if (capri.gaming || cfg.visible === false) { talkMenu.hide(); if (!dictation.fromWake) dictation.cancel(); }
     capri.wander = cfg.wander;
     capri.possessWindows = cfg.possess;
     if (cfg.scale !== capri.scale) capri.setScale(cfg.scale);
@@ -316,11 +406,10 @@ async function boot() {
       case 'status':
         brain.status();
         break;
-      case 'chat': // "Talk to her" in her menu
+      case 'chat': talkMenu.hide({ keepFocus: true }); // "Talk to her" in her menu
         chat.start();
         break;
       case 'memory':
-        chat.close();
         chat.start(true);
         break;
       case 'report': // "Mission report" in her menu
@@ -402,11 +491,9 @@ async function boot() {
   if (config.visible === false) capri.stowNow();
   else if (intro) await capri.intro(capri.spot('post'));
   else await capri.materialize(capri.spot('post'));
-  if (!config.welcomed) {
-    host.setConfig({ welcomed: true });
-    panel.say({ kind: 'info', line: 'CapriGPT is local. Click me to chat. Right-click for my control room. Everything stays local.', hold: 12000 });
-  }
-  else panel.say({ kind: 'info', line: pick(brain.t.online), hold: 4000 });
+  if (!config.welcomed) host.setConfig({ welcomed: true });
+  publishCompanionState();
+  host.companionEvent?.('startup');
   document.documentElement.dataset.caprigptReady = 'true';
 
   // In the evening, after a real day's work, she brings you her report card once, on her own,
@@ -414,6 +501,7 @@ async function boot() {
   setInterval(() => {
     const day = mission.day;
     const quiet = !brain.busySessions.length && !panel.visible && !capri.busy && !capri.act;
+    if (!capri.companion.options.dailyRoutine || capri.gaming || capri.fullscreen) return;
     if (new Date().getHours() < 18 || day.reported || day.missions < 3 || !quiet) return;
     if (capri.stowed || capri.dormant || capri.mode === 'sleep') return;
     if (brain.report()) {

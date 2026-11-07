@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const moduleSource = fs.readFileSync(path.join(__dirname, '../src/renderer/js/acting.js'));
 const load = () => import(`data:text/javascript;base64,${moduleSource.toString('base64')}`);
-const additions = ['idleSway', 'idlePreen', 'idleStretch', 'listen', 'think', 'read', 'search', 'type', 'gameReady'];
+const additions = ['idleWave', 'idleSway', 'idlePreen', 'idleStretch', 'listen', 'think', 'read', 'search', 'type', 'gameReady'];
 
 test('new acting sheets finish, hold finite poses and stay silent in both directions', async () => {
   const { ACTS, NEUTRAL, Player } = await load();

@@ -1,6 +1,6 @@
 'use strict';
 // Run with npm run test:desktop. Exercises our own app via its preload IPC API.
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, powerMonitor } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
@@ -11,12 +11,60 @@ const scratch = path.resolve(__dirname, '../../../work');
 fs.mkdirSync(scratch, { recursive: true });
 process.env.CAPRIGPT_TEST_PROFILE = fs.mkdtempSync(path.join(scratch, 'caprigpt-smoke-'));
 process.env.CAPRIGPT_CONNECTION_FILE = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'integration.json');
+let cognitiveProbe, proactiveProbe, reflectionProbe, cognitiveSchemaSeen = false, foregroundContext;
+if (process.argv.includes('--cognitive-only')) {
+  require('../src/main/native-windows').context = () => ({ foreground: { app: 'Code', title: 'Synthetic project' } });
+  require('../src/main/native-windows').foregroundBounds = () => null;
+  for (const [file, key, capture] of [
+    ['cognitive-foundation', 'CognitiveFoundation', value => cognitiveProbe = value],
+    ['proactive-conversation', 'ProactiveConversation', value => proactiveProbe = value],
+    ['cognitive-reflection', 'ReflectionEngine', value => reflectionProbe = value],
+  ]) {
+    const module = require('../src/main/' + file), Original = module[key];
+    module[key] = class extends Original { constructor(options) { super(options); capture(this); } };
+  }
+  const { CodexBrain } = require('../src/main/codex-brain');
+  CodexBrain.prototype.status = async () => ({ ok: true, backend: 'codex', model: 'codex' });
+  CodexBrain.prototype.chat = async function(text, delta, progress, options = {}) {
+    if (this.cwd.endsWith('caprigpt-codex-cognition')) {
+      assert.deepEqual(this.tools.specs(), []);
+      assert.equal(options.recordHistory, false); assert.ok(options.outputSchema);
+      cognitiveSchemaSeen = true;
+      if (options.outputSchema.properties.hypothesis) return JSON.stringify({
+        question: 'Would a second pair of eyes be useful?', hypothesis: 'Possibly ordinary project work.',
+        counterpoint: 'App visits do not establish intent.', confidence: 0.3, priority: 0.4, next_step: 'ask_later' });
+      return JSON.stringify({ speak: true, message: 'What kind of game would you like to build?' });
+    }
+    foregroundContext = this.context();
+    if (!/goal context probe/i.test(text)) assert.ok(this.history.some(row => row.content.includes('What kind of game')));
+    delta?.('A platformer sounds fun.'); return 'A platformer sounds fun.';
+  };
+}
+const requestEffects=[];
+if(process.argv.includes('--requests-only')) {
+  require('../src/main/ollama-runtime').executable=()=>null;
+  require('../src/main/ollama').models=async()=>['qwen3.5:9b'];
+  require('../src/main/native-windows').foregroundBounds=()=>null;
+  require('../src/main/web-tools').WebTools.prototype.search=async()=>({type:'search',items:[{title:'Netflix',url:'https://www.netflix.com/'}]});
+  require('../src/main/desktop-tools').DesktopTools.prototype.openUrl=async(url,browser)=>{
+    requestEffects.push({url,browser});return {type:'website',title:url,browser,launchRequested:true,note:`Sent ${url} to ${browser}.`};
+  };
+  require('../src/main/ollama').chat=async(request,delta)=>{
+    if(request.schema?.properties?.goals){
+      const input=JSON.parse(request.messages.at(-1).content);
+      if(/netflix/i.test(input.request))return JSON.stringify({intent:'act',message:'',goals:[{type:'open_website',target:'Netflix',browser:'Firefox'}],
+        steps:[input.availableResults?{tool:'open_result',query:'',index:0}:{tool:'search_web',query:'Netflix official website',index:0}]});
+      return JSON.stringify({intent:'chat',message:'',goals:[],steps:[]});
+    }
+    delta('Hello, choom.');return 'Hello, choom.';
+  };
+}
 if (process.argv.includes('--conversation-only')) {
   require('../src/main/ollama-runtime').executable = () => null;
   require('../src/main/ollama').models = async () => ['qwen3.5:9b'];
   require('../src/main/native-windows').foregroundBounds = () => null;
 }
-if (process.argv.includes('--fullscreen-only') || process.argv.includes('--memory-only') || process.argv.includes('--foreground-priority') || process.argv.includes('--memory-language-only') || process.argv.includes('--agent-only') || process.argv.includes('--settings-only') || process.argv.includes('--settings-pointer') || process.argv.includes('--tasks-only') || process.argv.includes('--playback-live') || process.argv.includes('--firefox-live') || process.argv.includes('--chrome-context-live')) {
+if (process.argv.includes('--tts-only') || process.argv.includes('--fullscreen-only') || process.argv.includes('--memory-only') || process.argv.includes('--foreground-priority') || process.argv.includes('--memory-language-only') || process.argv.includes('--agent-only') || process.argv.includes('--settings-only') || process.argv.includes('--settings-pointer') || process.argv.includes('--tasks-only') || process.argv.includes('--playback-live') || process.argv.includes('--firefox-live') || process.argv.includes('--chrome-context-live')) {
   // Isolated profile, no server startup, model or real dialogs.
   require('../src/main/ollama-runtime').executable = () => null;
   require('../src/main/ollama').models = async () => [];
@@ -72,6 +120,82 @@ app.whenReady().then(async () => {
     const js = (source) => win.webContents.executeJavaScript(source);
     for (let i = 0; i < 120 && !await js("document.documentElement.dataset.caprigptReady === 'true'"); i++) await pause(500);
     assert.equal(await js("document.documentElement.dataset.caprigptReady"), 'true');
+    if (process.argv.includes('--cognitive-only')) {
+      require('../src/main/config').save({ gamingMode: false, proactiveEnabled: true, cognitiveEnabled: true,
+        autonomyEnabled: true, wakeWordEnabled: false, ttsEnabled: false,
+        privacy: { contextEvents: true, contextForeground: true } });
+      cognitiveProbe.observeApp('Code'); cognitiveProbe.observeApp('Code');
+      const question = cognitiveProbe.observeApp('Code'); assert.ok(question);
+      powerMonitor.emit('lock-screen');
+      assert.equal(reflectionProbe.canRun(), false, 'reflection stays paused while locked');
+      assert.equal(await reflectionProbe.run(), false);
+      powerMonitor.emit('unlock-screen');
+      reflectionProbe.canRun = () => true;
+      assert.equal(await reflectionProbe.run(), true);
+      assert.equal(cognitiveSchemaSeen, true);
+      const route = text => js(`host.personalRoute(${JSON.stringify(text)})`);
+      assert.equal(JSON.parse((await route('/curiosity history ' + question.id)).text)[0].reflection.next_step, 'ask_later');
+      await js("document.querySelector('#panel').click()"); await pause(500);
+      proactiveProbe.canRun = () => true; proactiveProbe.state.nextAt = 0;
+      assert.equal(await proactiveProbe.run(), true);
+      for (let i = 0; i < 100 && !await js("document.querySelector('.panel__line').textContent.includes('What kind of game')"); i++) await pause(50);
+      assert.match(await js("document.querySelector('.panel__line').textContent"), /What kind of game/);
+      assert.equal(win.isFocusable(), false);
+      await js("document.querySelector('[data-id=reply]').click()");
+      for (let i = 0; i < 100 && !await js("document.querySelector('#panel').classList.contains('is-chat')"); i++) await pause(50);
+      assert.equal(await js("document.querySelector('#panel').classList.contains('is-chat')"), true);
+      await js("document.querySelector('.panel__input').value='A platformer!';document.querySelector('.panel__chat').requestSubmit()");
+      for (let i = 0; i < 100 && !await js("document.querySelector('.panel__line').textContent.includes('platformer sounds')"); i++) await pause(50);
+      assert.match(await js("document.querySelector('.panel__line').textContent"), /platformer sounds/);
+      require('../src/main/config').save({ privacy: { memoryEnabled: true, memoryRecall: true } });
+      assert.match((await route('/goals add Finish Capri roadmap')).text, /Saved goal #1/);
+      assert.match((await route('/goals next 1 Review test results')).text, /updated/);
+      foregroundContext = null;
+      await js("document.querySelector('.panel__input').value='Goal context probe';document.querySelector('.panel__chat').requestSubmit()");
+      for (let i = 0; i < 100 && !foregroundContext; i++) await pause(50);
+      assert.equal(foregroundContext.savedGoals[0].text, 'Finish Capri roadmap');
+      assert.equal(foregroundContext.savedGoals[0].next_step, 'Review test results');
+      require('../src/main/config').save({ privacy: { memoryEnabled: true, memoryRecall: false } });
+      await pause(100); foregroundContext = null;
+      await js("document.querySelector('.panel__input').value='Goal context probe';document.querySelector('.panel__chat').requestSubmit()");
+      for (let i = 0; i < 100 && !foregroundContext; i++) await pause(50);
+      assert.deepEqual(foregroundContext.savedGoals, []);
+      assert.match((await route('/goals delete 1')).text, /deleted/);
+      await route('/companion off');
+      assert.equal(JSON.parse((await route('/companion status')).text).enabled, false);
+      assert.equal(await proactiveProbe.run(), false);
+      console.log('PASS: Codex schema/no tools, reflection lock gate, persistent inquiry, proactive reply context, saved goals in foreground context, recall revocation, deletion and pause. Isolated profile, inference mocked.');
+      clearTimeout(limit); app.exit(0); return;
+    }
+    if (process.argv.includes('--tts-only')) {
+      await js('host.setConfig({ttsEnabled:true,ttsEngine:"windows",muted:false,visible:true})');
+      win.showInactive();
+      const result = await js('host.ttsSpeak({text:"Hello. The local speech connection works."})');
+      assert.equal(result.ok,true,result.error);
+      assert.equal(Buffer.from(result.audio,'base64').toString('ascii',0,4),'RIFF');
+      await js('host.setConfig({muted:true})');
+      assert.equal((await js('host.ttsSpeak({text:"Muted speech"})')).ok,false);
+      await js('host.setConfig({muted:false})');
+      await js('window.ttsPending=host.ttsSpeak({text:"A very long reply. ".repeat(70)});setTimeout(()=>host.ttsCancel(),100)');
+      assert.equal((await js('window.ttsPending')).ok,false);
+      console.log('PASS: actual overlay preload → TTS IPC → Windows synthesis → WAV; mute and in-flight interruption. Isolated profile.');
+      clearTimeout(limit);app.exit(0);return;
+    }
+    if(process.argv.includes('--requests-only')) {
+      const until=async(check,label)=>{for(let i=0;i<100;i++){if(await check())return;await pause(30);}throw Error('Timed out: '+label);};
+      await js('host.setConfig({lang:"en",privacy:{memoryEnabled:false,contextEvents:false}})');
+      win.webContents.send('capri:command',{name:'chat'});
+      await until(()=>js("document.querySelector('#panel').classList.contains('is-chat')"),'chat');
+      const submit=text=>js(`document.querySelector('.panel__input').value=${JSON.stringify(text)};document.querySelector('.panel__chat').requestSubmit()`);
+      await submit('can you open netflix in firefox?');
+      await until(()=>js("document.querySelector('.panel__line').textContent.includes('Sent https://www.netflix.com/ to Firefox.')"),'website task receipt');
+      assert.deepEqual(requestEffects,[{url:'https://www.netflix.com/',browser:'Firefox'}]);
+      await submit('Hello');
+      await until(()=>js("document.querySelector('.panel__line').textContent==='Hello, choom.'"),'ordinary conversation');
+      assert.equal(requestEffects.length,1);
+      console.log('PASS: actual chat form → main semantic interpreter → search observation → browser constraint propagation → website executor → receipt; ordinary chat still answers. Isolated profile, model/search/launch effects mocked.');
+      clearTimeout(limit);app.exit(0);return;
+    }
     if (process.argv.includes('--conversation-only')) {
       const requests = [];
       const originalFetch = global.fetch;
@@ -79,7 +203,9 @@ app.whenReady().then(async () => {
       global.fetch = async (url, options) => {
         if (url === `${require('../src/main/ollama').base()}/api/show`) return Response.json({ details: { parameter_size: '9B', context_length: 262144 } });
         if (url === `${require('../src/main/ollama').base()}/api/chat`) {
-          requests.push(JSON.parse(options.body));
+          const body=JSON.parse(options.body);
+          if(body.format?.properties?.goals)return new Response(JSON.stringify({message:{content:JSON.stringify({intent:'chat',message:'',goals:[],steps:[]})},done:true})+'\n');
+          requests.push(body);
           return new Response(JSON.stringify({ message: { content: answer }, done: true }) + '\n');
         }
         return originalFetch(url, options);
@@ -178,6 +304,24 @@ app.whenReady().then(async () => {
       const state=()=>js('host.fullscreenState()');
       const shown=()=>js("document.querySelector('#capri').dataset.fullscreen === 'visible'");
       const away=()=>js("document.querySelector('#capri').dataset.fullscreen === 'away'");
+      let ignoresMouse=true;
+      const applyIgnore=win.setIgnoreMouseEvents.bind(win);
+      win.setIgnoreMouseEvents=(on,options)=>{ignoresMouse=on;return applyIgnore(on,options);};
+      await js(`(async()=>{
+        const {Capri}=await import('./js/capri.js');const draw=Capri.prototype.drawFrame;
+        Capri.prototype.drawFrame=function(...args){window.fullscreenPet=this;return draw.apply(this,args);};
+      })()`);
+      await until(()=>js('Boolean(window.fullscreenPet)'),'pet input probe');
+      await js(`window.fullscreenPet.wander=false;window.fullscreenPet.nextMove=window.fullscreenPet.nextGaze=Infinity;
+        window.petClicks=0;const click=window.fullscreenPet.onClick;
+        window.fullscreenPet.onClick=()=>{window.petClicks++;click();};true;`);
+      const point=()=>js(`(()=>{const p=window.fullscreenPet,h=p.head();
+        for(let dy=-20;dy<80;dy+=4)for(let dx=-30;dx<=30;dx+=4){const x=Math.round(h.x+dx),y=Math.round(h.y+dy);if(p.hit(x,y))return{x,y};}
+        throw Error('No opaque pet hit target');})()`);
+      const stationary=await point(),overlayBounds=win.getBounds();
+      // A stationary pointer has no new mousemove after showInactive().
+      screen.getCursorScreenPoint=()=>({x:overlayBounds.x+stationary.x,y:overlayBounds.y+stationary.y});
+      win.webContents.sendInputEvent({type:'mouseMove',...stationary});
       fullscreenProbe={...fullscreen,caption:true};await pause(100);
       assert.equal((await state()).active,false,'Maximized captioned window is not fullscreen');
       const started=Date.now();fullscreenProbe=fullscreen;
@@ -187,12 +331,45 @@ app.whenReady().then(async () => {
       const oldRevision=(await state()).revision;
       fullscreenProbe=null;
       await until(async()=>await shown()&&win.isVisible(),'teleport back');
+      assert.equal(win.isFocusable(),true,'Returning from fullscreen must restore normal mouse activation without stealing focus');
+      await until(()=>!ignoresMouse,'stationary-pointer hit target restored');
       await js(`host.fullscreenRendered({revision:${oldRevision},hidden:true})`);await pause(300);
       assert.equal(win.isVisible(),true,'Late departure acknowledgment cannot re-hide the returned pet');
       for(let i=0;i<24;i++){fullscreenProbe=i%2?null:fullscreen;await pause(25);}
       fullscreenProbe=null;
       await until(async()=>!(await state()).active&&await shown()&&win.isVisible(),'rapid-toggle final visible state');
       await pause(350);assert.equal(win.isVisible(),true,'No delayed hide after rapid toggles');
+      assert.equal(win.isFocusable(),true);
+      const clickAt=async at=>{
+        win.webContents.sendInputEvent({type:'mouseMove',...at});await pause(50);
+        win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...at});
+        win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...at});await pause(60);
+      };
+      await clickAt(await point());
+      assert.equal(await js('window.petClicks'),1,'Left click must reach the returned character');
+      // Clear the status panel, then exercise real pointer capture and dragging.
+      await js("document.querySelector('#panel').click()");await pause(200);
+      const dragAt=await point(),beforeDrag=await js('({...window.fullscreenPet.pos})');
+      win.webContents.sendInputEvent({type:'mouseMove',...dragAt});await pause(30);
+      win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...dragAt});
+      win.webContents.sendInputEvent({type:'mouseMove',x:dragAt.x-35,y:dragAt.y-35,modifiers:['leftButtonDown']});await pause(50);
+      assert.equal(await js('window.fullscreenPet.dragging'),true,'Drag can start after fullscreen');
+      assert.ok(await js(`window.fullscreenPet.pos.x<${beforeDrag.x}-20`));
+      win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,x:dragAt.x-35,y:dragAt.y-35});
+      await until(()=>js('!window.fullscreenPet.dragging'),'drag release after fullscreen');
+      await until(()=>js("!window.fullscreenPet.busy&&window.fullscreenPet.stance!=='fall'"),'drop settles before chat');
+      require('../src/main/ollama').models=async()=>['qwen3.5:9b'];
+      require('../src/main/ollama').chat=async(request,delta)=>{if(request.schema?.properties?.goals)return JSON.stringify({intent:'chat',message:'',goals:[],steps:[]});delta('Left click restored.');return 'Left click restored.';};
+      win.webContents.send('capri:command',{name:'chat'});
+      await until(()=>js("document.querySelector('#panel').classList.contains('is-chat')"),'chat after fullscreen');
+      await pause(500);
+      await js("document.querySelector('.panel__input').value='Hello Capri';document.querySelector('.panel__input').dispatchEvent(new Event('input'))");
+      const buttonPoint=selector=>js(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);
+      await clickAt(await buttonPoint('.panel__send'));
+      try { await until(()=>js("document.querySelector('.panel__line').textContent==='Left click restored.'"),'Send button receives left click'); }
+      catch(error){console.error('Returned chat:',await js("({line:document.querySelector('.panel__line').textContent,input:document.querySelector('.panel__input').value,busy:document.querySelector('.panel__input').disabled,chat:document.querySelector('#panel').className,petBusy:window.fullscreenPet.busy,stance:window.fullscreenPet.stance})"));throw error;}
+      await clickAt(await buttonPoint('.panel__close'));
+      await until(()=>js("!document.querySelector('#panel').classList.contains('is-chat')||document.querySelector('#panel').hidden"),'Close button receives left click');
       // Existing teleport effects may still be running when fullscreen reverses.
       win.webContents.send('capri:command',{name:'teleport'});
       fullscreenProbe=fullscreen;await pause(100);fullscreenProbe=null;
@@ -233,7 +410,7 @@ app.whenReady().then(async () => {
       await until(async()=>await shown()&&win.isVisible(),'fullscreen ends with manually stowed pet');
       assert.equal(await js("document.querySelector('#capri').hidden && !document.querySelector('#chip').hidden"),true,'Fullscreen does not undo manual stowing');
       assert.equal((await js('host.getConfig()')).visible,false);
-      console.log(`PASS: actual fullscreen IPC/shader/OS visibility path with simulated native geometry; detection ${detectionMs} ms, rapid reversals, stale acknowledgments, overlapping teleport, Gaming mode and manual stow.`);
+      console.log(`PASS: fullscreen IPC/shader/OS visibility, restored native mouse activation, stationary-pointer routing, trusted left click/drag/Send/Close; detection ${detectionMs} ms, rapid reversals, stale acknowledgments, overlapping teleport, Gaming mode and manual stow. Native fullscreen geometry simulated; chat inference mocked.`);
       clearTimeout(limit);app.exit(0);return;
     }
     if(process.argv.includes('--foreground-priority')) {
@@ -241,6 +418,7 @@ app.whenReady().then(async () => {
       const started=new Promise(resolve=>{entered=resolve;});
       ollama.models=async()=>['qwen3.5:9b'];
       ollama.chat=async(request,delta,signal)=>{
+        if(request.schema?.properties?.goals)return JSON.stringify({intent:'chat',message:'',goals:[],steps:[]});
         if(request.schema){backgroundCalls++;entered();await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{aborted=true;reject(Error('cancelled'));},{once:true}));}
         replyCalls++;assert.match(request.messages[0].content,/Gabriel/);
         assert.equal(await priorityTestAgent.run('','foreground-change'),'Foreground request has priority');
@@ -252,7 +430,9 @@ app.whenReady().then(async () => {
       store.remember('Gabriel lives in Nicaragua.','explicit',{profile:true});store.close();
       win.webContents.send('capri:command',{name:'chat'});
       for(let i=0;i<80&&!await js("document.querySelector('#panel').classList.contains('is-chat')");i++)await pause(100);
-      const background=priorityTestAgent.run('','resume');await started;
+      await priorityTestAgent.done;priorityTestAgent.lastEvent=-Infinity;
+      const background=priorityTestAgent.run('','resume');
+      await Promise.race([started,background.then(result=>{throw Error('Background fixture did not enter inference: '+result);})]);
       await js("document.querySelector('.panel__input').value='what do you know about me?';document.querySelector('.panel__chat').requestSubmit()");
       for(let i=0;i<100&&await js("document.querySelector('.panel__input').disabled");i++)await pause(100);
       const answer=await js("document.querySelector('.panel__line').textContent");
@@ -344,11 +524,13 @@ app.whenReady().then(async () => {
     if(process.argv.includes('--tasks-only')) {
       const ollama=require('../src/main/ollama');
       ollama.models=async()=>['qwen3.5:9b'];
-      ollama.chat=async({messages},_delta,signal)=>{
-        signal?.throwIfAborted();const data=JSON.parse(messages.at(-1).content);const goal=data.goal;
+      ollama.chat=async({messages,schema},_delta,signal)=>{
+        signal?.throwIfAborted();const data=JSON.parse(messages.at(-1).content);const goal=data.request||data.goal;
         const step=(tool,query='',index=0)=>({tool,query,index});
-        const steps=/steam/i.test(goal)?[step('steam_deals')]:/news/i.test(goal)?[step('search_news','AI models')]:/rubius/i.test(goal)?[step('youtube_latest','rubius'),step('play_video')]:[];
-        return JSON.stringify({message:'unsupported',steps});
+        const goals=[{type:/rubius/i.test(goal)?'play_video':'research',target:goal,browser:''}];
+        if(schema?.properties?.goals&&!schema.properties.steps)return JSON.stringify({intent:'act',message:'',goals});
+        const steps=/steam/i.test(goal)?[step('steam_deals')]:/news/i.test(goal)?[step('search_news','AI models')]:/rubius/i.test(goal)?[data.availableResults?.type==='youtube'?step('play_video'):step('youtube_latest','rubius')]:[];
+        return JSON.stringify({intent:steps.length?'act':'unsupported',message:'unsupported',goals,steps});
       };
       const route=text=>js(`host.personalRoute(${JSON.stringify(text)},808)`);
       assert.match((await route('capri open file explorer')).text,/visible desktop window/);assert.deepEqual(taskEffects.apps,['File Explorer']);
@@ -432,6 +614,13 @@ app.whenReady().then(async () => {
       const legacy = await fetch('http://127.0.0.1:47824/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hook_event_name:'Stop'})});
       assert.equal(legacy.status,404,'Legacy unauthenticated Claude events must no longer be accepted');
       await run("document.querySelector('[data-page=appearance]').click()");
+      for (const key of ['idleAnimations','cursorInteractions','personality','dailyRoutine','surpriseAnimations']) {
+        assert.equal(await run(`document.querySelector('[data-key=${key}]').checked`),true,`${key} defaults on`);
+        await run(`document.querySelector('[data-key=${key}]').click()`);await pause(100);
+        assert.equal((await js('host.getConfig()'))[key],false,`${key} saves through settings IPC`);
+        await run(`document.querySelector('[data-key=${key}]').click()`);await pause(100);
+        assert.equal((await js('host.getConfig()'))[key],true,`${key} restores`);
+      }
       await run("document.querySelector('[data-scale=\"0.8\"]').click()"); await pause(200);
       assert.equal((await js('host.getConfig()')).scale,0.8);
       await run("document.querySelector('[data-page=sound]').click(); const el=document.querySelector('[data-key=volume]'); el.value='35'; el.dispatchEvent(new Event('change',{bubbles:true}))"); await pause(200);
@@ -463,6 +652,21 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelector('#capri').dataset.gamingTeleport"),'returned','Resume completes the teleport arrival');
       await run("document.querySelector('#close').click()"); await pause(100); assert.equal(controls.isVisible(),false);
       await js('host.openMenu()'); await pause(150); assert.equal(controls.isVisible(),true);
+      win.webContents.send('capri:command',{name:'memory'});
+      await pause(2300); // Let the opening listen pose finish.
+      const gesture = async (text, expected) => {
+        await js(`document.querySelector('.panel__input').value=${JSON.stringify(text)};document.querySelector('.panel__chat').requestSubmit()`);
+        for (let i=0;i<80;i++) {
+          if (await js(`document.querySelector('.panel__line').textContent.includes(${JSON.stringify(expected)})`)) return;
+          await pause(50);
+        }
+        throw Error('Local companion command failed: '+text+' / '+await js("document.querySelector('.panel__line').textContent"));
+      };
+      await gesture('/actions','Try wave');
+      await gesture('dance','ghost dance');
+      await gesture('take a nap','quiet little nap');
+      await gesture('wake up','I’m here');
+      await gesture('how are you feeling','Feeling');
       assert.deepEqual(mainErrors,[]);
       console.log('PASS: custom control room, all seven sections, saved appearance/sound, narrow settings permissions, removed legacy controls, gaming pause/resume, close/reopen');
       console.log('CAPTURES:', captureDir);

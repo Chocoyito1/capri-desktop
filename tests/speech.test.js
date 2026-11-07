@@ -79,6 +79,41 @@ async function rendererFixture(){
   return {dictation,panel,input,status,calls,send:row=>receive({id:dictation.id,...row})};
 }
 
+test('wake handoff preserves the stream, strips the address upstream and submits once after speech finishes',async()=>{
+  const f=await rendererFixture();let sent=0;
+  f.input.value='';f.input.selectionStart=f.input.selectionEnd=0;
+  f.panel.chatForm={requestSubmit(){sent++;}};
+  const capture={async stop(){},cancel(){}};
+  f.dictation.adoptWake({id:'wake-handoff-01',capture,text:'Open Firefox',complete:true});
+  assert.equal(f.dictation.capture,capture);assert.equal(f.input.value,'Open Firefox');
+  assert.equal(sent,0,'Wait for pending audio to flush before sending');
+  await tick();assert.equal(f.calls.at(-1)[0],'stop');
+  f.send({type:'stopped'});assert.equal(sent,1);assert.equal(f.dictation.id,null);
+  f.send({id:'wake-handoff-01',type:'stopped'});assert.equal(sent,1);
+});
+
+test('wake cancellation never submits a partial request and existing drafts require review',async()=>{
+  const f=await rendererFixture();let sent=0;
+  f.panel.chatForm={requestSubmit(){sent++;}};
+  const capture={async stop(){},cancel(){}};
+  f.dictation.adoptWake({id:'wake-handoff-02',capture,text:'Open Firefox',complete:true});
+  await tick();f.send({type:'stopped'});
+  assert.equal(sent,0,'Do not automatically send a command appended to an existing draft');
+  assert.match(f.input.value,/Please Open Firefox/);
+  f.input.value='';f.input.selectionStart=f.input.selectionEnd=0;
+  f.dictation.adoptWake({id:'wake-handoff-03',capture,text:'Delete this',complete:false});
+  f.send({type:'stopped',cancelled:true});assert.equal(sent,0);
+});
+
+test('switching a wake request to typing preserves its transcript for review without auto-send',async()=>{
+  const f=await rendererFixture();let sent=0;
+  f.input.value='';f.input.selectionStart=f.input.selectionEnd=0;
+  f.panel.chatForm={requestSubmit(){sent++;}};
+  f.dictation.adoptWake({id:'wake-to-typing-01',capture:{async stop(){},cancel(){}},text:'Help me plan tomorrow',complete:false});
+  f.panel.onTyping();await tick();f.send({type:'stopped'});
+  assert.equal(sent,0);assert.equal(f.input.value,'Help me plan tomorrow');assert.equal(f.input.readOnly,false);
+});
+
 test('Whisper phrase results preserve the draft and never auto-send; late session results cannot overwrite it',async()=>{
   const f=await rendererFixture();await f.dictation.toggle();const id=f.dictation.id;
   assert.equal(f.input.readOnly,true);assert.equal(f.panel.chatSend.disabled,true);

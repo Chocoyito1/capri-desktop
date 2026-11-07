@@ -63,7 +63,7 @@ test('quiet notifications animate work bursts and retain completion, error and a
   assert.match(companion.context(), /No prompts/);
 });
 
-test('focus cycle loops held poses without effect or sound cues', async () => {
+test('focus cycle loops smooth poses without effect or sound cues', async () => {
   const { Player } = await loadRenderer('acting.js');
   const player = new Player('focus', { at: 0 });
   const duration = player.total * 1000 / 12;
@@ -73,35 +73,39 @@ test('focus cycle loops held poses without effect or sound cues', async () => {
     const pose = player.resolve(frame.pose, 1);
     assert.ok(Math.abs(pose.head) <= 0.12);
     assert.ok(Math.abs(pose.bob) <= 3);
-    assert.deepEqual(player.sample(now + duration), frame);
+    const repeated = player.sample(now + duration);
+    assert.equal(repeated.index, frame.index);
+    for (const key of Object.keys(pose)) {
+      const values = [pose[key]].flat(), next = [repeated.pose[key]].flat();
+      values.forEach((value, i) => assert.ok(Math.abs(value - next[i]) < 1e-10, key));
+    }
   }
 });
 
-test('installed offline Ollama offers explicit start and reopens chat with activity', async () => {
+test('chat opens immediately even if Codex status is unavailable', async () => {
   // Supply the two formatting helpers so this controller can run without browser globals.
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/js/chat.js'), 'utf8')
-    .replace("import { pick, fmt } from './util.js';", 'const pick = items => items[0]; const fmt = text => text;');
+    .replace("import { welcomePicker } from './welcome.js';", "const welcomePicker=()=>()=>'Hey. What is on your mind?';").replace("import { pick, fmt } from './util.js';", 'const pick = items => items[0]; const fmt = text => text;');
   const { Chat } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   let started = 0, message;
   const panel = { chatInput: { focus() {} }, say: msg => { message = msg; return true; }, setActions() {}, hide() {} };
   const chat = new Chat({ panel, capri: { wake() {}, towardCenter() {}, perform() {} }, voice: {},
     brain: { lang: 'en', t: { chat: { offline: 'Cannot reach Ollama', ok: 'OK', hello: ['Hello'], again: ['Hello again'] } }, integrationActivity: () => 'Codex is working.' },
-    host: { onChatDelta() {}, chatStatus: async () => started ? { ok: true, model: 'llama3.2:3b' } : { ok: false, error: 'offline', installed: true },
+    host: { onChatDelta() {}, chatStatus: async () => { assert.fail('Opening chat must never wait for Codex status'); },
       startOllama: async () => { started++; return { ok: true }; }, focusOverlay() {}, openApps: async () => [] },
   });
   await chat.start();
   assert.equal(started, 0, 'Checking status must not start a background server');
-  assert.match(message.quote, /installed but is not running/);
-  assert.equal(message.actions[0].id, 'start');
-  await message.onAction('start');
-  assert.equal(started, 1);
+  assert.ok(message.line);
   assert.equal(chat.open, true);
-  assert.equal(message.activity, 'Codex is working.');
+  assert.equal(message.activity, undefined);
+  assert.equal(message.actions, undefined);
+
 });
 
 test('ordinary chat does not launch app discovery; only a requested close does', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/js/chat.js'), 'utf8')
-    .replace("import { pick, fmt } from './util.js';", 'const pick = items => items[0]; const fmt = text => text;');
+    .replace("import { welcomePicker } from './welcome.js';", "const welcomePicker=()=>()=>'Hey. What is on your mind?';").replace("import { pick, fmt } from './util.js';", 'const pick = items => items[0]; const fmt = text => text;');
   const { Chat } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   let discoveries = 0;
   const chat = new Chat({

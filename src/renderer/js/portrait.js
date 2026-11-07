@@ -7,6 +7,12 @@ export class Portrait {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.frame = document.createElement('canvas');
+    this.frame.width = this.frame.height = 128;
+    this.frameCtx = this.frame.getContext('2d');
+    this.ghost = document.createElement('canvas');
+    this.ghost.width = this.ghost.height = 128;
+    this.ghostCtx = this.ghost.getContext('2d');
     this.active = false;
     this.raf = 0;
     this.mood = 'calm';
@@ -29,7 +35,7 @@ export class Portrait {
     this.nextBlink = now + 2800 + Math.random() * 2800;
     this.blinkStart = -Infinity;
     this.glitchStart = -Infinity;
-    this.nextGlitch = now + 7000 + Math.random() * 6000;
+    this.nextGlitch = now + 1000 + Math.random() * 1500;
   }
 
   setMood(mood) {
@@ -63,7 +69,7 @@ export class Portrait {
       }
       if (now >= this.nextGlitch) {
         this.glitchStart = now;
-        this.nextGlitch = now + 8000 + Math.random() * 6000;
+        this.nextGlitch = now + 3500 + Math.random() * 3500;
       }
       this.draw(now);
       this.last = now;
@@ -95,24 +101,51 @@ export class Portrait {
       else blink = 1 - (age - 105) / 105;
       blink = blink * blink * (3 - 2 * blink);
     }
-    ctx.globalAlpha = 1;
-    ctx.drawImage(this.image, 0, 0, width, height, 0, 0, size, size);
+    // Compose the current blink once so displaced slices never reopen her eyes.
+    const frame = this.frameCtx;
+    frame.clearRect(0, 0, 128, 128);
+    frame.globalAlpha = 1;
+    frame.drawImage(this.image, 0, 0, width, height, 0, 0, 128, 128);
     if (blink > 0 && !this.fallback) {
-      ctx.globalAlpha = blink;
-      ctx.drawImage(this.image, width, 0, width, height, 0, 0, size, size);
-      ctx.globalAlpha = 1;
+      frame.globalAlpha = blink;
+      frame.drawImage(this.image, width, 0, width, height, 0, 0, 128, 128);
+      frame.globalAlpha = 1;
     }
-    // A few narrow displaced scan bands, never a bright full-frame flash.
+    ctx.globalAlpha = 1;
+    ctx.drawImage(this.frame, 0, 0, size, size);
+    // Brief RGB echoes and staggered signal tears; never a full-frame flash.
     const glitchAge = now - this.glitchStart;
-    if (motion && glitchAge >= 0 && glitchAge < 150) {
-      const offset = Math.floor(glitchAge / 35) % 2 ? -2 : 2;
-      ctx.globalAlpha = 0.7;
-      for (const [y, h] of [[18, 3], [39, 2], [48, 1]]) {
-        ctx.drawImage(this.image, 0, y / size * height, width, h / size * height, offset, y, size, h);
+    if (motion && glitchAge >= 0 && glitchAge < 280) {
+      const phase = Math.floor(glitchAge / 40);
+      const strength = Math.sin(Math.PI * glitchAge / 280);
+      const offset = (phase % 2 ? -1 : 1) * (2 + strength * 3);
+      const ghost = this.ghostCtx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      for (const [color, shift] of [['#15f5df', offset], ['#ed24a6', -offset]]) {
+        ghost.globalCompositeOperation = 'source-over';
+        ghost.clearRect(0, 0, 128, 128);
+        ghost.drawImage(this.frame, 0, 0);
+        ghost.globalCompositeOperation = 'source-in';
+        ghost.fillStyle = color; ghost.fillRect(0, 0, 128, 128);
+        ctx.globalAlpha = strength * 0.24;
+        ctx.drawImage(this.ghost, shift, 0, size, size);
       }
-      ctx.globalAlpha = 0.22;
-      ctx.fillStyle = '#43ffd4'; ctx.fillRect(1, 20, size - 2, 1);
-      ctx.fillStyle = '#d444ff'; ctx.fillRect(1, 41, size - 2, 1);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 0.85;
+      for (const [base, h] of [[16, 4], [35, 3], [49, 2]]) {
+        const y = base + phase % 3;
+        ctx.drawImage(this.frame, 0, y * 2, 128, h * 2, offset, y, size, h);
+      }
+      ctx.globalAlpha = strength * 0.5;
+      ctx.fillStyle = '#43ffd4'; ctx.fillRect(1, 20 + phase, 18, 1);
+      ctx.fillStyle = '#ed24a6'; ctx.fillRect(40, 43 - phase, 23, 1);
+      ctx.restore();
+    }
+    if (motion) {
+      const scan = (now / 85) % 72 - 8;
+      ctx.globalAlpha = 0.07;
+      ctx.fillStyle = '#43ffd4'; ctx.fillRect(0, scan, size, 2);
     }
     ctx.globalAlpha = 0.055;
     ctx.fillStyle = '#090310';

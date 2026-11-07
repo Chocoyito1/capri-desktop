@@ -16,6 +16,7 @@ const SLEEP_AFTER = 10 * 60 * 1000;
 const DOZE_AFTER = 20 * 1000; // asleep this long, she comes apart down to her mask
 const GRAVITY = 2600; // px/s²
 const THIGH = 73;     // hip to knee, sprite px (see sprite.js)
+const REST_DROP = THIGH * 0.7 + (SPRITE.feet.y - 305) * (1 - Math.cos(1.1));
 
 const UPLINK_DAY = 'capri.uplinkDay'; // the last day she sent the red light up
 
@@ -47,10 +48,13 @@ export class Capri {
     this.wander = true;
     this.possessWindows = true; // tray: "Possess my windows"
     this.dragging = false;
+    this.pointerHeld = false;
     this.gaming = false;
     this.nextAction = 0;
     this.nextIdle = performance.now() + rand(12000, 22000);
     this.lastIdle = null;
+    this.groundRest = null;
+    this.nextSit = performance.now() + rand(45000, 80000);
 
     this.p = {
       seed: 0, boil: 0.9, hair: 0, head: 0, mane: 0, armL: 0, armR: 0, longL: 1, longR: 1, sit: 0, kickL: 0, kickR: 0,
@@ -85,6 +89,7 @@ export class Capri {
     this.onClick = null;
     this.onMenu = null;   // right-click on her
     this.onGaze = null;
+    this.onIdleWave = null;
     this.onMode = null;   // (mode, previous)
     this.onStow = null;   // she's in her biochip
     this.onUnstow = null; // she's coming out of it
@@ -92,6 +97,7 @@ export class Capri {
     this.onDoze = null;   // ('start', face) | 'waking' | 'end': down to her mask and back
 
     this.alphaMap = this.buildAlphaMap(image);
+    this.restLegs = this.buildRestLegs();
     this.setScale(this.scale);
     this.bindPointer();
     this.loop = this.loop.bind(this);
@@ -126,6 +132,22 @@ export class Capri {
     this.place();
   }
 
+  // The visible leg outline lets folded feet stay on the floor at every scale.
+  buildRestLegs() {
+    const outline = [];
+    for (let y = 299; y < SPRITE.height; y++) {
+      const row = [[], []];
+      for (let x = 0; x < SPRITE.width; x++) {
+        if (this.alphaMap[(y * SPRITE.width + x) * 4 + 3] > 40)
+          row[x < 117 + Math.max(0, y - 300) * 0.15 ? 0 : 1].push(x);
+      }
+      row.forEach((xs, side) => {
+        if (xs.length) for (const x of [xs[0], xs.at(-1)]) outline.push({x, y, side});
+      });
+    }
+    return outline;
+  }
+
   // Flip, lean and squash all pivot on her feet, or on her seat when she sits on a ledge
   // (so a squash presses her onto it instead of pulling her down through it).
   pivot() {
@@ -148,10 +170,23 @@ export class Capri {
     return this.stance === 'peek' && this.peekSide === 'top';
   }
 
+  get restOffset() {
+    if (!this.groundRest) return 0;
+    if (!this.restLegs?.length) return REST_DROP * this.p.sit * this.scale;
+    const knee = SPRITE.hip + THIGH * (1 - 0.7 * this.p.sit);
+    let bottom = knee;
+    for (const {x, y, side} of this.restLegs) {
+      const angle = side ? this.p.kickR : this.p.kickL;
+      const dx = x - (side ? 142 : 106);
+      bottom = Math.max(bottom, knee + (y - 305) * Math.cos(angle) + dx * Math.sin(angle) * (side ? -1 : 1));
+    }
+    return (SPRITE.feet.y - bottom) * this.scale;
+  }
+
   place() {
     const s = this.scale;
     const left = this.pos.x - (SPRITE.pad + SPRITE.feet.x) * s;
-    const top = this.pos.y - (SPRITE.pad + SPRITE.feet.y) * s + this.bob;
+    const top = this.pos.y - (SPRITE.pad + SPRITE.feet.y) * s + this.bob + this.restOffset;
     const turn = (this.upside ? 180 : 0) + this.tilt;
     this.root.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
     this.canvas.style.transform = `rotate(${turn.toFixed(2)}deg) scale(${(this.facing * this.sx).toFixed(3)}, ${this.sy.toFixed(3)})`;
@@ -161,7 +196,7 @@ export class Capri {
   // her face on screen, plus `top`: the tips of her mane
   head(at = this.pos, facing = this.facing) {
     const s = this.scale;
-    const bob = at === this.pos ? this.bob : 0;
+    const bob = at === this.pos ? this.bob + this.restOffset : 0;
     const dx = (SPRITE.head.x - SPRITE.feet.x) * s * facing;
     const dy = (SPRITE.feet.y - SPRITE.head.y) * s;
     if (at === this.pos && this.upside) {
@@ -175,7 +210,7 @@ export class Capri {
   hit(x, y) {
     if (this.hidden || this.fullscreen || this.p.alpha < 0.5) return false;
     const s = this.scale;
-    const fy = this.pos.y + this.bob;
+    const fy = this.pos.y + this.bob + this.restOffset;
     if (this.upside) {
       x = 2 * this.pos.x - x;
       y = 2 * fy - y;
@@ -326,8 +361,8 @@ export class Capri {
       this.lastInk = now;
     }
 
-    const under = this.base.sample(now);
-    const base = under ? this.base.resolve(under.pose, this.facing) : {};
+    const under = this.base.sample(now, reducedMotion.matches);
+    let base = under ? this.base.resolve(under.pose, this.facing) : {};
     let act = null;
     let cue = null;
     if (under && under.index !== this.baseIndex) {
@@ -344,9 +379,13 @@ export class Capri {
         }
       } else {
         this.endAct(true);
+        const settled = this.base.sample(now, reducedMotion.matches);
+        base = settled ? this.base.resolve(settled.pose, this.facing) : {};
       }
     }
     let pose = { ...NEUTRAL, ...base, ...act };
+    if (this.groundRest && reducedMotion.matches) pose = { ...NEUTRAL, ...ACTS.floorSit.keys[0][1] };
+    if (this.groundRest) p.sit = pose.seat ?? 1;
     if (this.dragging && reducedMotion.matches) pose = { ...NEUTRAL, armL: 0.4, armR: 0.4, kickL: 0.08, kickR: 0.08 };
     if (reducedMotion.matches) this.motionBlend = null;
     if (this.motionBlend) {
@@ -380,20 +419,34 @@ export class Capri {
   }
 
   behave(now) {
+    if (this.hidden || this.stowed || this.dormant) return;
     if (this.fullscreen) return;
     if (this.gaming) return;
     if (this.stance === 'fall') {
       this.updateFall(now);
       return;
     }
-    if (this.busy || this.dragging || this.gaming || this.chatThinking) return;
+    if (this.busy || this.dragging || this.pointerHeld || this.gaming || this.chatThinking) return;
 
-    if (now > this.nextIdle && this.mode === 'idle' && !this.act && !this.pointing
+    if (this.companion?.tick()) return;
+
+    if (this.groundRest) {
+      if (this.groundRest.phase === 'seated' && now >= this.groundRest.until) this.beginRest(false);
+      return; // A seated break does not trigger wandering, possession or large flourishes.
+    }
+    if (now >= this.nextSit && this.mode === 'idle' && this.stance === 'stand'
+        && Math.abs(this.pos.y - this.floor) < 5 && !this.act && !this.pointing && !reducedMotion.matches) {
+      this.beginRest(true);
+      return;
+    }
+
+    if (this.companion?.options.idleAnimations !== false && now > this.nextIdle && this.mode === 'idle' && !this.act && !this.pointing
         && !reducedMotion.matches && ['stand', 'sit'].includes(this.stance)) {
       this.nextIdle = now + rand(16000, 30000);
-      const name = pick(['idleSway', 'idlePreen', 'idleStretch'].filter((name) => name !== this.lastIdle));
+      const name = this.companion?.idle() || pick(['idleSway', 'idlePreen', 'idleStretch', 'idleWave'].filter((name) => name !== this.lastIdle));
       this.lastIdle = name;
       this.perform(name);
+      if (name === 'idleWave') this.onIdleWave?.();
     }
 
     if (now > this.nextTwitch) {
@@ -464,6 +517,41 @@ export class Capri {
 
   // ---------- acting ----------
 
+  // A desktop rest is independent of window perching and keeps the floor anchor.
+  beginRest(sit) {
+    if (this.busy || this.dragging || this.hidden || this.stowed || this.dormant || this.fullscreen || this.gaming
+        || this.stance !== 'stand' || this.pointing || (this.act && this.act.player.priority > 1)) return false;
+    if (sit && this.groundRest) return true;
+    if (!sit && !this.groundRest) return true;
+    this.endAct(false);
+    this.groundRest = {phase: sit ? 'down' : 'up', until: Infinity};
+    this.base = new Player('floorSit');
+    this.nextSit = performance.now() + rand(90000, 150000);
+    if (reducedMotion.matches) {
+      this.p.sit = sit ? 1 : 0;
+      this.groundRest = sit ? {phase:'seated', until:performance.now() + rand(20000,40000)} : null;
+      this.base = this.restBase();
+      this.drawFrame();
+    } else this.perform(sit ? 'sitDown' : 'standUp');
+    return true;
+  }
+
+  async requestPosture(sit) {
+    if (this.busy || this.dragging || this.hidden || this.stowed || this.dormant || this.fullscreen || this.gaming
+        || this.stance === 'fall' || (this.act && this.act.player.priority > 2)) return 'Let me finish this move first, then ask me again.';
+    if (this.groundRest?.phase === 'down' || this.groundRest?.phase === 'up') return 'One little move at a time—ask me again in a second.';
+    this.wake();
+    this.stopPointing();
+    if (sit && (this.groundRest || this.stance === 'sit')) return 'Already sitting. Pretty comfy here.';
+    if (!sit && !this.groundRest && this.stance === 'stand') return 'Already standing!';
+    if (this.stance !== 'stand' || (sit && Math.abs(this.pos.y - this.floor) > 5)) {
+      await this.teleport({x:this.pos.x, y:this.floor});
+      if (!sit) return 'Back on my feet.';
+    }
+    return this.beginRest(sit) ? (sit ? 'Taking a little seat. Comfy time.' : 'Getting back on my feet!')
+      : 'Let me finish this move first, then ask me again.';
+  }
+
   // Quiet action beats never interrupt travel, pointing, alerts or an existing reaction.
   reactToAction(name) {
     const now = performance.now();
@@ -491,13 +579,14 @@ export class Capri {
     if (this.fullscreen || this.dragging || this.stance === 'fall') return Promise.resolve();
     const act = ACTS[name];
     if (!act || (this.gaming && name !== 'gameReady')) return Promise.resolve();
-    if (reducedMotion.matches && act.fps === 24) {
+    if (reducedMotion.matches && (act.fps === 24 || act.smooth)) {
       if (act.flip) this.facing *= -1;
       return Promise.resolve();
     }
     const next = new Player(name, { dir, reach });
     if (this.act && this.act.player.priority > next.priority) return Promise.resolve();
     this.endAct(false);
+    if (act.smooth) this.blendMotion(140);
     return new Promise((done) => {
       this.act = { player: next, done };
     });
@@ -507,11 +596,25 @@ export class Capri {
     const current = this.act;
     if (!current) return;
     this.act = null;
+    if (completed && current.player.act.smooth) this.blendMotion(160);
+    if (['sitDown', 'standUp'].includes(current.player.name) && this.groundRest) {
+      if (completed && current.player.name === 'sitDown') {
+        this.groundRest = {phase:'seated', until:performance.now() + rand(20000,40000)};
+        this.p.sit = 1;
+      } else {
+        this.groundRest = null;
+        this.p.sit = 0;
+        this.nextSit = performance.now() + rand(90000,150000);
+      }
+      this.base = this.restBase();
+    }
     if (completed && current.player.act.flip) this.facing *= -1;
     current.done();
   }
 
   setStance(stance, { perch = null, peekSide = null, dir = 0 } = {}) {
+    this.groundRest = null;
+    this.nextSit = performance.now() + rand(45000,80000);
     this.stance = stance;
     this.perch = perch;
     this.peekSide = peekSide;
@@ -529,6 +632,7 @@ export class Capri {
 
   baseAct() {
     if (this.dragging) return 'drag';
+    if (this.groundRest) return 'floorSit';
     if (this.stance === 'sit') return 'sit';
     if (this.stance === 'peek') return 'peek';
     if (this.stance === 'fall') return 'fall';
@@ -1052,7 +1156,7 @@ export class Capri {
     this.fx.slices(head.x - 70 * s, head.y - 40 * s, 170 * s, 320 * s);
     await tween(p, { collapse: 1, glitch: 1, dissolve: 0.5, split: 9 }, 170, ease.in);
     p.alpha = 0;
-    const ground = from.y - (this.p.sit ? (SPRITE.feet.y - SPRITE.hip) * s : 0);
+    const ground = from.y - (this.stance === 'sit' ? (SPRITE.feet.y - SPRITE.hip) * s : 0);
     if (!this.upside) {
       // the void she leaves behind, like in the show: a black slit with a red line in it
       this.fx.slit(from.x - 10 * s * this.facing, head.top, ground, { width: 56 * s + 10 });
@@ -1639,7 +1743,7 @@ export class Capri {
 
   blendMotion(ms = 150) {
     this.motionBlend = reducedMotion.matches ? null : {
-      pose: { ...NEUTRAL, ...this.p, bob: this.bob, tilt: this.tilt, sx: this.sx, sy: this.sy },
+      pose: { ...NEUTRAL, ...this.p, seat: this.p.sit, bob: this.bob, tilt: this.tilt, sx: this.sx, sy: this.sy },
       start: performance.now(), ms,
     };
   }
@@ -1653,7 +1757,9 @@ export class Capri {
     this.canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || this.busy || this.gaming || this.fullscreen || !this.hit(e.clientX, e.clientY)) return;
       down = { x: e.clientX, y: e.clientY, pos: { ...this.pos }, pointerId: e.pointerId };
+      this.pointerHeld = true;
       this.canvas.setPointerCapture(e.pointerId);
+      this.onPointerHold?.();
     });
     window.addEventListener('pointermove', (e) => {
       this.mouse = { x: e.clientX, y: e.clientY }; // a window she's in watches it
@@ -1693,6 +1799,7 @@ export class Capri {
       const pointerId = down.pointerId;
       const wasDragging = this.dragging;
       down = null;
+      this.pointerHeld = false;
       this.dragging = false;
       if (this.canvas.hasPointerCapture(pointerId)) this.canvas.releasePointerCapture(pointerId);
       if (wasDragging) {
@@ -1701,6 +1808,7 @@ export class Capri {
       } else if (!cancelled) {
         this.onClick?.();
       }
+      this.onPointerHold?.();
     };
     window.addEventListener('pointerup', release);
     window.addEventListener('pointercancel', e => release(e, true));
@@ -1735,6 +1843,9 @@ export class Capri {
   // When the pointer comes close she turns around to face it and cocks her head;
   // if she's peeking, she's shy and ducks away.
   notice(x, y) {
+    if (this.companion?.options.cursorInteractions === false || this.gaming || this.dragging || this.pointing || this.chatThinking || reducedMotion.matches) return;
+    if (this.mode === 'work' || this.mode === 'alert' || this.act) return;
+    if (this.companion?.pointer(x, y)) return;
     if (this.fullscreen) return;
     if (this.busy || this.hidden || this.stance === 'fall' || this.sky) return; // the satellite has all her attention
     const h = this.head();

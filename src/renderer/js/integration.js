@@ -9,7 +9,6 @@ export class IntegrationCompanion {
     this.snapshot = { lastSeen: null, sessions: [] };
     host.onIntegrationState((snapshot) => {
       this.snapshot = snapshot;
-      if (this.panel.current?.chat) this.panel.setActivity(this.activityLine());
       if (snapshot.resumed) {
         const waiting = this.visibleSessions().find((event) => event.stage === 'waiting');
         if (waiting) this.handle(waiting);
@@ -91,6 +90,7 @@ export class IntegrationCompanion {
     // Connection, interruption and session-close events update her state silently.
     if (!['waiting', 'tool_failed', 'completed'].includes(event.stage)) return;
     const kind = event.stage === 'waiting' ? 'alert' : event.stage === 'tool_failed' ? 'error' : event.stage === 'completed' ? 'done' : event.stage === 'working' ? 'work' : 'info';
-    this.panel.say({ kind, badge: label, tag: event.project, line: lines[event.stage], hold: event.stage === 'waiting' ? null : 6500 });
+    if (this.brain.generatedDialogue && event.stage !== 'waiting') { this.host.companionEvent?.('external-task'); return; }
+    this.panel.say({ kind, badge: label, tag: event.project, line: this.brain.generatedDialogue ? 'Approval required in Codex' : lines[event.stage], hold: event.stage === 'waiting' ? null : 6500 });
   }
 }

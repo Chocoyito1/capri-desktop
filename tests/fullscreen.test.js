@@ -79,3 +79,21 @@ test('completed fullscreen disappearance and reduced-motion reversal both settle
     assert.equal(f.frames.size,0);
   }
 });
+
+test('fullscreen changes while gaming stay silent, then restore effects after resuming',async()=>{
+  const f=await fixture(),sounds=[],effects=[];
+  f.capri.voice.play=name=>sounds.push(name);
+  f.capri.fx.beam=()=>effects.push('beam');
+  f.capri.fx.burst=()=>effects.push('burst');
+  f.capri.gaming=true;
+  for(let revision=1;revision<=6;revision++) {
+    f.send({active:revision%2===1,revision});f.step(revision*200);
+  }
+  assert.deepEqual(sounds,[]);assert.deepEqual(effects,[]);
+  assert.equal(f.capri.fullscreen,false);
+  f.capri.gaming=false;
+  f.send({active:true,revision:7});f.step(1500);
+  f.send({active:false,revision:8});f.step(1700);
+  assert.deepEqual(sounds,['teleport-out','teleport-in']);
+  assert.equal(f.capri.fullscreen,false);
+});
