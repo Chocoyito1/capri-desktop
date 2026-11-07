@@ -6,18 +6,27 @@ const { randomBytes } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, Tray, ipcMain, screen, protocol, net, shell, globalShortcut, nativeImage,
-  clipboard, ClipboardItem, dialog, powerMonitor,
+  clipboard, ClipboardItem, dialog, powerMonitor, desktopCapturer,
 } = require('electron');
 
 const config = require('./config');
 const { LANGS } = require('./labels');
 const { createSettingsWindow } = require('./settings-window');
+const { overlayPatch } = require('./settings-policy');
+const { SettingsAgent } = require('./settings-agent');
 const { createBridge } = require('./bridge');
 const { startWindowWatch } = require('./windows');
 const { startFullscreenWatch } = require('./fullscreen');
 const { SpeechInput } = require('./speech');
-const ollama = require('./ollama');
-const ollamaRuntime = require('./ollama-runtime');
+const { SpeechOutput } = require('./tts');
+const { CodexBrain } = require('./codex-brain');
+const { CodexTools } = require('./codex-tools');
+const { ScreenAccess } = require('./screen-access');
+const { CognitiveFoundation } = require('./cognitive-foundation');
+const { ReflectionEngine } = require('./cognitive-reflection');
+const { ProactiveConversation } = require('./proactive-conversation');
+const { CompanionGoals } = require('./companion-goals');
+const { personalityContext } = require('./personality');
 const { CodexEvents } = require('./codex-events');
 const { connectionFile } = require('../../hooks/caprigpt-codex-hook');
 const codexEvents = new CodexEvents();
@@ -32,10 +41,18 @@ const { ForegroundPriority } = require('./foreground-priority');
 const { ActionAgent } = require('./action-agent');
 const { WebTools } = require('./web-tools');
 const { DesktopTools } = require('./desktop-tools');
+const { RequestInterpreter } = require('./request-interpreter');
 const { createAgentBrowser } = require('./agent-browser');
 const { WorldState } = require('./world-state');
 const capabilities = require('./capabilities');
-let memoryStore;
+let memoryStore, goalStore, autonomy, reflection, curiosity;
+let sessionAvailable = true;
+let projectRouting = false;
+// A spoken wake address temporarily permits requested foreground work, not background actions.
+let voiceSession = false;
+const agentConfig = () => voiceSession ? { ...config.load(), gamingMode: false } : config.load();
+let presentation = personalityContext();
+const bodyJobs = new Map();
 const memory = () => {
   if (!memoryStore) memoryStore = new MemoryStore(path.join(app.getPath('userData'), 'personal-memory.sqlite'), {
     retentionDays: () => permissions(config.load().privacy).retentionDays,
@@ -43,13 +60,42 @@ const memory = () => {
   return memoryStore;
 };
 const pcContext = new ContextService({ settings: () => config.load() });
+const goals = () => {
+  if (!goalStore) goalStore = new CompanionGoals({
+    file: path.join(app.getPath('userData'), 'companion-goals.sqlite'), settings: () => config.load(),
+    choose: async () => {
+      const result = await dialog.showOpenDialog({ title: 'Choose Capri’s project folder', properties: ['openDirectory'] });
+      return result.canceled ? null : result.filePaths[0];
+    },
+    confirm: confirmMemory,
+  });
+  return goalStore;
+};
 const world = new WorldState({ context: pcContext });
 const closeApp = require('./action-confirmation').createCloseHandler({ config, apps, dialog });
-const foreground = new ForegroundPriority(() => agent);
-const agent = new Agent({
-  settings: () => config.load(), world, models: () => ollama.models(), apps, close: closeApp,
-  infer: (request, signal) => ollama.chat(request, () => {}, signal),
-  idle: () => !chats.size && !actions.busy && !memoryRequests.busy,
+const foreground = new ForegroundPriority(() => ({
+  get busy() { return agent.busy || Boolean(autonomy?.busy) || Boolean(reflection?.busy); },
+  get reason() { return agent.busy ? agent.reason : 'autonomous'; },
+  get done() { return Promise.allSettled([agent.done, autonomy?.done, reflection?.done]); },
+  cancel() { agent.cancel(); autonomy?.cancel(); reflection?.cancel(); },
+}));
+// Legacy structured decision services use the same Codex transport, never Ollama.
+const decisionBrain = new CodexBrain({ settings: () => config.load(),
+  cwd: path.join(app.getPath('temp'), 'caprigpt-codex-decisions'),
+  tools: { specs: () => [], instructions: () => 'Return only the JSON decision requested in the supplied schema. No tools or actions.' } });
+const inferDecision = async (request, signal) => {
+  const stop = () => decisionBrain.cancel();
+  signal?.throwIfAborted(); signal?.addEventListener('abort', stop, { once: true });
+  try {
+    decisionBrain.reset();
+    return await decisionBrain.chat(JSON.stringify({ schema: request.schema, messages: request.messages }));
+  } finally { signal?.removeEventListener('abort', stop); decisionBrain.reset(); }
+};
+const decisionModels = async () => ['codex'];
+const agent = new Agent({ model: 'codex',
+  settings: () => config.load(), world, models: decisionModels, apps, close: closeApp,
+  infer: inferDecision,
+  idle: () => !chats.size && !actions.busy && !memoryRequests.busy && !requests.busy,
   foregroundBusy: () => foreground.active > 0,
   recall: query => {
     const p = permissions(config.load().privacy);
@@ -59,27 +105,83 @@ const agent = new Agent({
   notify: text => overlay?.webContents.send('agent:suggestion', text),
 });
 const agentBrowser = createAgentBrowser();
-const actions = new ActionAgent({ settings: () => config.load(), models: () => ollama.models(),
-  infer: (request, signal) => ollama.chat(request, () => {}, signal), web: new WebTools(),
-  desktop: new DesktopTools({ openPath: file => shell.openPath(file), native: require('./native-windows') }),
+const actions = new ActionAgent({ settings: () => config.load(), models: decisionModels,
+  infer: inferDecision, web: new WebTools(),
+  desktop: new DesktopTools({ openPath: file => shell.openPath(file), openExternal: url => shell.openExternal(url), native: require('./native-windows') }),
   browser: agentBrowser, idle: () => !chats.size && !agent.busy && !memoryRequests.busy,
   progress: event => overlay?.webContents.send('task:progress', event),
+});
+const requests = new RequestInterpreter({ actions, settings: () => config.load(), models: decisionModels,
+  infer: inferDecision,
+  progress: event => overlay?.webContents.send('task:progress', event),
+});
+const settingsRequests = new SettingsAgent({ localOnly: true, state: settingsState, patch: updateConfig,
+  action: settingsAction, open: openSettings,
+  infer: inferDecision,
 });
 const confirmMemory = async (message, detail) => (await dialog.showMessageBox({ type: 'question',
   title: 'Capri — Personal memory', message, detail, buttons: ['Cancel', 'Confirm'],
   defaultId: 0, cancelId: 0, noLink: true })).response === 1;
 const memoryRequests = new MemoryAgent({settings: () => config.load(), store: memory,
-  models: () => ollama.models(), infer: (request, signal) => ollama.chat(request, () => {}, signal),
+  models: decisionModels, infer: inferDecision,
   confirm: confirmMemory, idle: () => !chats.size && !agent.busy && !actions.busy,
 });
 const personal = new PersonalAssistant({
   settings: () => config.load(), store: memory, context: pcContext,
-  confirm: confirmMemory, memoryRequests,
+  confirm: confirmMemory,
   exportFile: async (text) => {
     const result = await dialog.showSaveDialog({ title: 'Export personal memories (plain text JSON)',
       defaultPath: 'capri-memories.json', filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (result.canceled || !result.filePath) return false;
     fs.writeFileSync(result.filePath, text, { mode: 0o600 }); return true;
+  },
+});
+
+const screenAccess = new ScreenAccess({ settings: agentConfig,
+  displays: () => {
+    const fg = require('./native-windows').foregroundBounds();
+    const active = fg ? screen.getDisplayNearestPoint(screen.screenToDipPoint({ x: Math.round(fg.x + fg.width / 2), y: Math.round(fg.y + fg.height / 2) })).id : screen.getPrimaryDisplay().id;
+    return screen.getAllDisplays().map(d => ({ id: d.id, bounds: d.bounds, primary: d.id === screen.getPrimaryDisplay().id, active: d.id === active }));
+  },
+  foreground: () => require('./native-windows').foregroundBounds(),
+  toNativePoint: point => screen.dipToScreenPoint(point), input: require('./desktop-input').perform,
+  confirm: confirmMemory,
+  capture: async display => {
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1600, height: 1000 }, fetchWindowIcons: false });
+    const source = sources.find(row => row.display_id === String(display.id));
+    if (!source || source.thumbnail.isEmpty()) throw Error('Windows did not provide a screen image.');
+    const size = source.thumbnail.getSize();
+    return { url: `data:image/jpeg;base64,${source.thumbnail.toJPEG(65).toString('base64')}`, ...size };
+  },
+});
+const currentContext = () => {
+  const p = permissions(agentConfig().privacy);
+  const savedGoals = p.memoryEnabled ? goals().context() : [];
+  return { presentation, capabilities: capabilities.registry(agentConfig()), externalCodexEvents: codexEvents.snapshot(),
+  savedGoals, currentProject: goals().projects.context(Math.max(0, p.promptBudget - Buffer.byteLength(JSON.stringify(savedGoals)))),
+  recentTasks: actions.grounding({ includeApps: false }),
+  recentConversation: brain?.history?.slice(-6) || [] };
+};
+const brainTools = new CodexTools({ settings: agentConfig, context: pcContext, screen: screenAccess,
+  body: (action, { check, signal }) => new Promise((resolve, reject) => {
+    check(); if (!overlay || overlay.isDestroyed() || config.load().gamingMode) return reject(Error('Capri’s body is unavailable.'));
+    const id = randomBytes(12).toString('hex');
+    const finish = (error, result) => { clearTimeout(timer); signal.removeEventListener('abort', stop); bodyJobs.delete(id); error ? reject(error) : resolve(result); };
+    const stop = () => finish(Error('Body action cancelled.'));
+    const timer = setTimeout(() => finish(Error('Body action timed out.')), 10000);
+    bodyJobs.set(id, result => finish(null, result)); signal.addEventListener('abort', stop, { once: true });
+    overlay.webContents.send('companion:body', { id, action });
+  }),
+  actions, store: memory, state: settingsState, patch: updateConfig, confirm: confirmMemory });
+const brain = new CodexBrain({ settings: agentConfig,
+  cwd: path.join(app.getPath('temp'), 'caprigpt-codex-brain'), tools: brainTools,
+  systemTools: () => config.load().systemAccess === true, workspace: () => goals().projects.workspace() || app.getPath('home'), context: currentContext,
+  onOutcome: receipt => goals().projects.recordVerification(receipt),
+  approve: async (message, { text, signal, item }) => {
+    signal.throwIfAborted();
+    const p = message.params;
+    return confirmMemory('Review Codex action', JSON.stringify({ currentRequest: text, action: message.method,
+      reason: p.reason, command: p.command, cwd: p.cwd, permissions: p.permissions, grantRoot: p.grantRoot, item: item || p.itemId }, null, 2).slice(0, 12000));
   },
 });
 
@@ -91,9 +193,43 @@ const DEV = process.argv.includes('--dev');
 const smokeTest = process.argv.some((arg) => path.basename(arg) === 'smoke-electron.js');
 app.setPath('userData', smokeTest && process.env.CAPRIGPT_TEST_PROFILE
   ? process.env.CAPRIGPT_TEST_PROFILE : path.join(app.getPath('appData'), 'CapriGPT'));
+// Installed Codex transport with no background tools, actions or conversation history.
+const cognitiveBrain = new CodexBrain({ settings: () => config.load(),
+  cwd: path.join(app.getPath('temp'), 'caprigpt-codex-cognition'),
+  tools: { specs: () => [], instructions: () => 'Return only the requested JSON. No tools or actions.' } });
+const inferCognitive = async (request, signal) => {
+  const stop = () => cognitiveBrain.cancel();
+  signal?.throwIfAborted(); signal?.addEventListener('abort', stop, { once: true });
+  try {
+    cognitiveBrain.reset();
+    return await cognitiveBrain.chat(JSON.stringify(request.messages), () => {}, () => {},
+      { outputSchema: request.schema, recordHistory: false });
+  } finally { signal?.removeEventListener('abort', stop); cognitiveBrain.reset(); }
+};
+curiosity = new CognitiveFoundation({ file: path.join(app.getPath('userData'), 'curiosity.sqlite'),
+  settings: () => config.load(), context: pcContext });
+const cognitiveIdle = () => !foreground.active && !chats.size && !brain.busy && !agent.busy &&
+  !actions.busy && !memoryRequests.busy && !requests.busy && !settingsRequests.busy;
+reflection = new ReflectionEngine({ journal: curiosity, settings: () => config.load(),
+  model: 'codex', models: decisionModels, infer: inferCognitive,
+  canRun: () => cognitiveIdle() && !autonomy?.busy && sessionAvailable && !voiceSession &&
+    (!speech.current || speech.current.mode === 'wake') && !fullscreenState.active });
+autonomy = new ProactiveConversation({ settings: rendererConfig, journal: curiosity,
+  model: 'codex', models: decisionModels, infer: inferCognitive,
+  observe: () => pcContext.snapshot('companion-conversation', ['contextForeground']),
+  memories: () => memory().list(10),
+  canRun: () => cognitiveIdle() && !reflection.busy && sessionAvailable &&
+    (!speech.current || speech.current.mode === 'wake') && !voiceSession && !fullscreenState.active &&
+    !presentation.chatOpen && presentation.canSpeak !== false &&
+    Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()) && powerMonitor.getSystemIdleTime() < 300,
+  notify: text => {
+    if (!overlay || overlay.isDestroyed() || presentation.chatOpen || fullscreenState.active) return false;
+    brain.history = [...brain.history, { role: 'assistant', content: text }].slice(-24);
+    overlay.webContents.send('companion:conversation', text); return true;
+  },
+});
 const PORT = Number(process.env.CAPRI_PORT) || 47823;
 const SOUND_EXT = /\.(mp3|wav|ogg|m4a)$/i;
-const OLLAMA_SITE = 'https://ollama.com';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'capri', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -108,15 +244,38 @@ let fullscreenState = { active: false, revision: 0 };
 let fullscreenHideTimer;
 // the watcher only speaks when something changes: the overlay asks for this when it (re)loads
 let lastWindows = null;
-let chatModels = null; // the Ollama models, as last seen (null: Ollama not reached)
-let ollamaStartup = Promise.resolve();
 const chats = new Map(); // id -> AbortController of an answer being streamed
+const wakeAllowed = () => Boolean(overlay && !overlay.isDestroyed() && config.load().wakeWordEnabled === true
+  && (!smokeTest || process.argv.includes('--wake-live')));
 const speech = new SpeechInput({
   runtimeDir: app.isPackaged ? path.join(app.getPath('userData'),'speech-runtime') : path.join(ROOT,'.caprigpt-local','speech-runtime'),
-  allowed: () => Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()
-    && !config.load().gamingMode && !fullscreenState.active),
-  notify: state => { if (overlay && !overlay.isDestroyed()) overlay.webContents.send('speech:state', state); },
+  allowed: () => Boolean(overlay && !overlay.isDestroyed() && (voiceSession || (overlay.isVisible()
+    && !config.load().gamingMode && !fullscreenState.active))),
+  wakeAllowed,
+  notify: state => {
+    if (!overlay || overlay.isDestroyed()) return;
+    if (state.type === 'wake') {
+      voiceSession = true; autonomy.cancel(); tts.cancel();
+      clearTimeout(fullscreenHideTimer);
+      overlay.webContents.setBackgroundThrottling(false); overlay.showInactive();
+    }
+    overlay.webContents.send('speech:state', state);
+  },
 });
+
+const tts = new SpeechOutput({ root: ROOT, config: () => config.load(),
+  allowed: () => speech.allowed() && (voiceSession || config.load().visible !== false)
+    && (!speech.current || speech.current.mode === 'wake'),
+  notify: state => { if (overlay && !overlay.isDestroyed()) overlay.webContents.send('tts:state', state); },
+});
+
+function endVoiceSession() {
+  voiceSession = false;
+  if (speech.current?.wakeActivated) speech.cancel();
+  if (overlay && !overlay.isDestroyed() && (fullscreenState.active || config.load().gamingMode)) {
+    overlay.setIgnoreMouseEvents(true, { forward: true }); overlay.setFocusable(false); overlay.hide();
+  }
+}
 
 const userSoundsDir = () => path.join(app.getPath('userData'), 'sounds');
 
@@ -178,7 +337,7 @@ function createOverlay() {
   overlay.setIgnoreMouseEvents(true, { forward: true });
   const microphonePermission = (contents, permission, details={}) =>
     contents === overlay?.webContents && permission === 'media' && Boolean(speech.current)
-      && speech.allowed() && (!details.mediaTypes || details.mediaTypes.every(type=>type==='audio'))
+      && speech.permitted(speech.current) && (!details.mediaTypes || details.mediaTypes.every(type=>type==='audio'))
       && (!details.mediaType || details.mediaType==='audio');
   overlay.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => callback(microphonePermission(contents,permission,details)));
   overlay.webContents.session.setPermissionCheckHandler((contents, permission, origin, details) => microphonePermission(contents,permission,details));
@@ -186,10 +345,10 @@ function createOverlay() {
   // always shown: put away, she's still there as her biochip in the corner
   overlay.once('ready-to-show', () => { if (!config.load().gamingMode && !fullscreenState.active) overlay.showInactive(); });
   overlay.webContents.on('render-process-gone', (_e, details) => {
-    speech.cancel();
+    speech.cancel(true); tts.cancel(); endVoiceSession();
     console.error('[capri] renderer gone:', details.reason);
   });
-  overlay.webContents.on('did-start-loading', () => speech.cancel());
+  overlay.webContents.on('did-start-loading', () => { speech.cancel(true); tts.cancel(); endVoiceSession(); });
   if (DEV) {
     overlay.webContents.on('console-message', (e) => {
       const { level, message, lineNumber, sourceId } = e;
@@ -226,6 +385,7 @@ async function setGamingMode(on) {
   try {
     updateConfig({ gamingMode: on });
     if (on) {
+      brain.cancel(); decisionBrain.cancel();
       const pending = [...chats.values()];
       pending.forEach(({ abort }) => abort.abort());
       overlay?.setFocusable(false);
@@ -234,16 +394,13 @@ async function setGamingMode(on) {
       windowWatch = null;
       // Bounded goodbye: a missing renderer or a hidden pet cannot delay the pause.
       if (overlay?.isVisible()) await gamingAnimation('gamingDeparture');
-      overlay?.hide();
+      if (!voiceSession) overlay?.hide();
       // Wait for cancelled requests to finish before sending the unload request.
       await Promise.allSettled(pending.map(({ done }) => done));
       await agent.done;
+      await requests.done;
       await actions.done;
       agentBrowser.stop();
-      try { await Promise.all([...new Set([pickModel(), capabilities.AGENT_MODEL])].map(model => ollama.unload(model))); }
-      catch (err) {
-        await dialog.showMessageBox({ type: 'warning', message: 'Gaming mode is on, but model unload failed.', detail: `${err.message}\nCheck Capri’s local model server at ${ollama.base()}/api/ps before gaming.` });
-      }
     } else {
       await gamingAnimation('gamingPrepareReturn');
       if (!fullscreenState.active) overlay?.showInactive();
@@ -257,7 +414,9 @@ async function setGamingMode(on) {
 function watchWindows() {
   if (windowWatch || config.load().gamingMode || !config.load().windowTracking) return;
   windowWatch = startWindowWatch({ overlay, onUpdate: (data) => {
-    if (lastWindows && lastWindows.fg !== data.fg) agent.event('foreground-change');
+    if (lastWindows && lastWindows.fg !== data.fg) curiosity.foregroundChanged().then(question => {
+      if (question) reflection.schedule();
+    }).catch(() => {});
     lastWindows = data;
     overlay?.webContents.send('windows:update', data);
   } });
@@ -267,21 +426,25 @@ function onFullscreen(active) {
   if (active === fullscreenState.active) return;
   const revision = fullscreenState.revision + 1;
   fullscreenState = { active, revision };
-  if (active) speech.cancel();
+  if (active) { if (speech.current?.mode !== 'wake' && !speech.current?.wakeActivated) speech.cancel(); if (!voiceSession) tts.cancel(); }
   clearTimeout(fullscreenHideTimer);
   if (!overlay || overlay.isDestroyed()) return;
   overlay.webContents.setBackgroundThrottling(false);
   if (active) {
     overlay.setIgnoreMouseEvents(true, { forward: true });
-    overlay.setFocusable(false);
+    if (!voiceSession) overlay.setFocusable(false);
     // Renderer normally acknowledges in 160 ms. This also handles a frozen renderer.
     fullscreenHideTimer = setTimeout(() => {
-      if (fullscreenState.active && fullscreenState.revision === revision && !overlay?.isDestroyed()) {
+      if (!voiceSession && fullscreenState.active && fullscreenState.revision === revision && !overlay?.isDestroyed()) {
         overlay?.hide();
         overlay?.webContents.setBackgroundThrottling(true);
       }
     }, 260);
   } else if (!config.load().gamingMode) {
+    // setFocusable(false) on departure changes native mouse activation too.
+    // Restore it without activating or focusing over the user's foreground app.
+    overlay.setFocusable(true);
+    overlay.setIgnoreMouseEvents(true, { forward: true });
     overlay.showInactive();
   }
   overlay.webContents.send('fullscreen:state', fullscreenState);
@@ -290,7 +453,7 @@ function onFullscreen(active) {
 // Ctrl+Alt+C: she folds herself away into her biochip in the corner, or comes back out of it.
 function toggleVisible(force) {
   const visible = typeof force === 'boolean' ? force : !config.load().visible;
-  if (!visible) speech.cancel();
+  if (!visible) { if (speech.current?.mode !== 'wake') speech.cancel(); tts.cancel(); }
   config.save({ visible });
   sendCommand('stow', { on: !visible });
   rebuildTray();
@@ -334,16 +497,32 @@ function resolveLang(setting) {
 // What the overlay gets: `lang` is the resolved one, `langSetting` what the user picked.
 function rendererConfig() {
   const cfg = config.load();
-  return { ...cfg, lang: resolveLang(cfg.lang), langSetting: cfg.lang };
+  return { ...cfg, wakeWordEnabled: smokeTest && !process.argv.includes('--wake-live') ? false : cfg.wakeWordEnabled,
+    lang: resolveLang(cfg.lang), langSetting: cfg.lang };
 }
 
 function updateConfig(patch) {
-  if (patch.gamingMode === true || patch.visible === false) speech.cancel();
-  agent.cancel(); // revoke in-flight decisions and proposals before applying new policy
-  memoryRequests.cancel();
-  if (['gamingMode', 'agentEnabled', 'desktopActions', 'privacy'].some(key => Object.hasOwn(patch,key))) actions.cancel();
+  const changes = key => Object.hasOwn(patch, key);
+  const policyChanged = ['gamingMode', 'agentEnabled', 'desktopActions', 'privacy', 'systemAccess', 'screenAwareness', 'autonomyEnabled', 'autonomyScreen'].some(changes);
+  const backendChanged = ['codexModel', 'codexExecutable', 'codexEffort'].some(changes);
+  if (['proactiveEnabled', 'cognitiveEnabled', 'visible', 'lang'].some(changes)) {
+    if (typeof autonomy !== 'undefined') autonomy?.touch();
+    if (typeof reflection !== 'undefined') reflection?.cancel();
+  }
+  if (policyChanged || backendChanged) {
+    if (typeof autonomy !== 'undefined') autonomy?.touch();
+    if (typeof reflection !== 'undefined') reflection?.cancel();
+    settingsRequests.cancel(); agent.cancel(); requests.cancel();
+    brain.cancel(); decisionBrain.cancel();
+  }
+  if (['gamingMode', 'privacy'].some(changes) || backendChanged) memoryRequests.cancel();
+  if (['gamingMode', 'privacy'].some(changes) || backendChanged) brain.reset();
+  if ((patch.gamingMode === true || patch.visible === false) && speech.current?.mode !== 'wake') speech.cancel();
+  if (patch.gamingMode === true || patch.visible === false
+      || ['muted', 'volume', 'ttsEnabled', 'ttsEngine', 'ttsPython', 'ttsReference', 'ttsReferenceText', 'ttsDevice'].some(changes)) tts.cancel();
   if (patch.privacy) patch = { ...patch, privacy: permissions({ ...config.load().privacy, ...patch.privacy }) };
   config.save(patch);
+  if (patch.wakeWordEnabled === false) { speech.cancel(); endVoiceSession(); }
   if (Object.hasOwn(patch, 'displayId')) fitOverlay();
   pcContext.eventSnapshot(); // discard event fields when permissions are revoked
   if (!config.load().windowTracking) {
@@ -351,6 +530,7 @@ function updateConfig(patch) {
     overlay?.webContents.send('windows:update', { fg: null, wins: [] });
   } else if (overlay) watchWindows();
   if (memoryStore) memoryStore.prune();
+  goalStore?.prune();
   const cfg = rendererConfig();
   overlay?.webContents.send('capri:config', cfg);
   rebuildTray();
@@ -360,6 +540,7 @@ function updateConfig(patch) {
 function settingsState() {
   return { config: { ...rendererConfig(), privacy: permissions(config.load().privacy) },
     runtime: runtime(), integration: codexEvents.snapshot(),
+    project: goals().projects.selected(),
     startup: app.getLoginItemSettings(loginItemOptions()).openAtLogin,
     displays: screen.getAllDisplays().map(d => ({ id: d.id, width: d.size.width, height: d.size.height })) };
 }
@@ -371,17 +552,33 @@ function rebuildTray() {
 
 function openSettings() { settingsRoom?.open(); }
 
+async function projectCommand(text) {
+  if (projectRouting || brain.busy || actions.busy || chats.size)
+    return { handled: true, text: 'Finish or stop the current request before changing project context.' };
+  projectRouting = true;
+  try {
+    autonomy.touch();
+    const previousScope = goals().projects.scope();
+    const result = await goals().projects.route(text);
+    if (goals().projects.scope() !== previousScope) actions.context?.clear();
+    brain.reset(); settingsRoom?.update();
+    return result;
+  } finally { projectRouting = false; }
+}
+
 async function settingsAction(name, value) {
   switch (name) {
     case 'gaming': await setGamingMode(value); break;
-    case 'visibility': toggleVisible(); break;
+    case 'visibility': toggleVisible(value); break;
     case 'startup': app.setLoginItemSettings({ ...loginItemOptions(), openAtLogin: value }); break;
     case 'sounds-folder': fs.mkdirSync(userSoundsDir(), { recursive: true }); {
       const error = await shell.openPath(userSoundsDir()); if (error) throw Error(error); break;
     }
     case 'memory-export': return (await personal.route('/memory export')).text;
-    case 'memory-delete': return (await personal.route('/memory delete-all')).text;
+    case 'memory-delete': { autonomy.touch(); const result = await personal.route('/memory delete-all'); brain.reset(); return result.text; }
     case 'memory-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing memory.'); sendCommand('memory'); break;
+    case 'project-choose': return (await foreground.run(() => projectCommand('/project choose'))).text;
+    case 'project-off': return (await foreground.run(() => projectCommand('/project off'))).text;
     case 'refresh': return runtime().currentSource ? 'Current local source is loaded.' : 'Local changes found. Restart Capri to load them.';
     case 'restart': app.relaunch(); app.quit(); break;
     case 'quit': app.quit(); break;
@@ -392,18 +589,6 @@ async function settingsAction(name, value) {
 // it needs the project folder as argument.
 function loginItemOptions() {
   return app.isPackaged ? {} : { path: process.execPath, args: [ROOT] };
-}
-
-// Qwen is the default brain; keep local model discovery for offline diagnostics.
-function pickModel(cfg = config.load()) {
-  if (!chatModels?.length) return null;
-  return chatModels.includes(cfg.chatModel) ? cfg.chatModel : chatModels[0];
-}
-
-async function refreshModels() {
-  chatModels = await ollama.models().catch(() => null);
-  rebuildTray();
-  return chatModels;
 }
 
 function createTray() {
@@ -417,10 +602,26 @@ function createTray() {
 
 function registerIpc() {
   const speechCaller = event => event.sender === overlay?.webContents;
+  ipcMain.on('companion:state', (event, state) => { if (speechCaller(event)) {
+      if (state?.chatOpen !== undefined && state.chatOpen !== presentation.chatOpen) autonomy.touch();
+      presentation = personalityContext(state);
+    } });
+  ipcMain.on('companion:event', (event, reason) => { if (speechCaller(event) && reason === 'chat-open') autonomy.touch(); });
+  ipcMain.on('companion:body-result', (event, result) => {
+    if (speechCaller(event) && typeof result?.id === 'string') bodyJobs.get(result.id)?.({ result: String(result.result || '').slice(0, 600) });
+  });
+  ipcMain.handle('tts:speak', (event, request) => speechCaller(event) ? tts.speak(request) : {ok:false,error:'Voice unavailable.'});
+  ipcMain.on('tts:cancel', event => { if (speechCaller(event)) tts.cancel(false); });
   ipcMain.handle('speech:start', (event, request) => {
     if (!speechCaller(event)) return { ok: false, error: 'speech-unavailable' };
+    autonomy.touch(); tts.cancel();
     return speech.start(request);
   });
+  ipcMain.handle('wake:enabled', (event, enabled) => {
+    if (!speechCaller(event) || typeof enabled !== 'boolean') throw Error('Invalid wake-word preference.');
+    return updateConfig({ wakeWordEnabled: enabled });
+  });
+  ipcMain.on('wake:end-session', event => { if (speechCaller(event)) endVoiceSession(); });
   ipcMain.handle('speech:stop', (event, request) => {
     if (!speechCaller(event)) return { ok: false, error: 'speech-unavailable' };
     return speech.stop(request?.id);
@@ -437,19 +638,57 @@ function registerIpc() {
     if (event.sender !== overlay?.webContents || state?.revision !== fullscreenState.revision
         || state.hidden !== fullscreenState.active) return;
     clearTimeout(fullscreenHideTimer);
-    if (state.hidden) overlay.hide();
-    overlay.webContents.setBackgroundThrottling(true);
+    if (state.hidden && !voiceSession) overlay.hide();
+    overlay.webContents.setBackgroundThrottling(!config.load().wakeWordEnabled && !voiceSession);
   });
   ipcMain.handle('runtime:info', () => runtime());
-  ipcMain.handle('personal:route', async (_event, text, id) => foreground.run(async () => {
+  ipcMain.handle('personal:route', async (event, text, id, conversation, commandsOnly = false) => foreground.run(async () => {
     try {
+      if (event.sender !== overlay?.webContents) throw Error('Overlay required.');
       if (typeof text !== 'string' || text.length > 12000) throw Error('Invalid message.');
-      if (/^\/(?:agent cancel|cancel)$/i.test(text.trim())) { actions.cancel(); memoryRequests.cancel(); }
+      autonomy.touch();
+      if (projectRouting) return { handled: true, text: 'Finish choosing your project before sending a request.' };
+      if (/^\/project(?:\s|$)/i.test(text.trim())) {
+        return await projectCommand(text);
+      }
+      const goalCommand = /^\/goals(?:\s|$)/i.test(text.trim()) ? goals().route(text) : null;
+      if (goalCommand) { brain.reset(); return goalCommand; }
+      const companion = /^\/companion(?:\s+(on|off|status))?$/i.exec(text.trim());
+      if (companion) {
+        const command = (companion[1] || 'status').toLowerCase();
+        if (command !== 'status') updateConfig({ proactiveEnabled: command === 'on' });
+        return { handled: true, text: JSON.stringify(autonomy.status(), null, 2) };
+      }
+      const curiosityCommand = /^\/curiosity(?:\s+(.*))?$/i.exec(text.trim());
+      if (curiosityCommand) {
+        const arg = (curiosityCommand[1] || 'status').trim().toLowerCase();
+        if (arg === 'status') return { handled: true, text: JSON.stringify({ ...curiosity.status(), reflection: reflection.status() }, null, 2) };
+        if (arg === 'list') return { handled: true, text: JSON.stringify(curiosity.list(), null, 2) };
+        const history = /^history (\d+)$/.exec(arg);
+        if (history) return { handled: true, text: JSON.stringify(curiosity.reviewContext(Number(history[1])), null, 2) };
+        if (arg === 'on' || arg === 'off') { updateConfig({ cognitiveEnabled: arg === 'on' }); return { handled: true, text: 'Curiosity ' + arg }; }
+        if (arg === 'clear') { reflection.cancel(); curiosity.clear(); return { handled: true, text: 'Curiosity journal cleared.' }; }
+        const decision = /^(resolve|dismiss)\s+(\d+)$/.exec(arg);
+        if (decision) return { handled: true, text: curiosity.update(Number(decision[2]), decision[1] === 'resolve' ? 'resolved' : 'dismissed') ? 'Question updated.' : 'Open question not found.' };
+        return { handled: true, text: 'Use /curiosity status, list, history <id>, on|off, resolve <id>, dismiss <id>, or clear.' };
+      }
+      const preference = await settingsRequests.route(text);
+      if (preference) return preference;
+      if (/^\/(?:agent cancel|cancel)$/i.test(text.trim())) { brain.cancel(); decisionBrain.cancel(); requests.cancel(); memoryRequests.cancel(); }
       const result = await agent.route(text.trim());
       if (result !== null) return { handled: true, text: result };
-      const local = await personal.route(text);
-      if (local.handled) return local;
-      return await actions.route(text,id) || local;
+      // Explicit slash commands remain available offline; natural language goes
+      // straight to the single Codex tool loop.
+      const simpleMemory = /^(?:forget\s+#?\d+\s*[.!]?$|edit memory\s+#?\d+\s*:|recall\s+)/i.test(text.trim())
+        || (/^(?:remember(?: that)?|recuerda(?: que)?)\s+/i.test(text.trim())
+          && !/\b(?:forget|remove|delete|edit|change|instead|olvida|borra|cambia)\b|[?]/i.test(text));
+      if (/^\/(?:memory|privacy|context)(?:\s|$)/i.test(text.trim())
+          || (simpleMemory && commandsOnly === true)) {
+        const local = await personal.route(text);
+        if (local.handled) brain.reset();
+        return local;
+      }
+      return { handled: false };
     }
     catch (err) { return { handled: true, text: `Local assistant unavailable: ${err.message}` }; }
   }));
@@ -459,7 +698,7 @@ function registerIpc() {
   });
   ipcMain.handle('integration:status', () => codexEvents.snapshot());
   ipcMain.on('overlay:interactive', (_e, on) => {
-    overlay?.setIgnoreMouseEvents(fullscreenState.active || config.load().gamingMode || !on, { forward: true });
+    overlay?.setIgnoreMouseEvents(((fullscreenState.active || config.load().gamingMode) && !voiceSession) || !on, { forward: true });
   });
   ipcMain.handle('overlay:cursor', () => {
     const p = screen.getCursorScreenPoint();
@@ -467,63 +706,45 @@ function registerIpc() {
     return { x: p.x - b.x, y: p.y - b.y, inside: p.x >= b.x && p.y >= b.y && p.x < b.x + b.width && p.y < b.y + b.height };
   });
   ipcMain.handle('config:get', () => rendererConfig());
-  ipcMain.handle('config:set', (_e, patch) => updateConfig(patch));
+  ipcMain.handle('config:set', (event, patch) => {
+    if (event.sender !== overlay?.webContents) throw Error('Overlay required.');
+    return updateConfig(DEV || smokeTest ? patch : overlayPatch(patch));
+  });
   ipcMain.handle('demo:window', (_e, open) => demoWindow(open));
   // right-clicking her: the same menu as the tray icon (which Windows often hides behind the ^ by the clock)
   ipcMain.on('menu:open', openSettings);
   ipcMain.handle('windows:get', () => lastWindows);
-  // talking to her (chat.js): is Ollama there, with a model to talk with
-  ipcMain.handle('chat:status', async () => {
-    if (config.load().gamingMode) return { ok: false, error: 'Gaming mode: resume from the control room.' };
-    await ollamaStartup; // an early click should wait for the background server
-    if (config.load().gamingMode) return { ok: false, error: 'Gaming mode: resume from the control room.' };
-    const models = await refreshModels();
-    if (!models) return { ok: false, error: 'offline', installed: Boolean(ollamaRuntime.executable()) };
-    if (!models.length) return { ok: false, error: 'nomodel' };
-    return { ok: true, model: pickModel(), version: VERSION };
+  ipcMain.handle('chat:status', async event => {
+    if (event.sender !== overlay?.webContents) throw Error('Overlay required.');
+    return { ...await brain.status(), version: VERSION };
   });
-  // her answer, streamed to the overlay piece by piece as `chat:delta`
-  ipcMain.handle('chat:send', async (_e, { id, messages }) => foreground.run(async () => {
-    if (config.load().gamingMode) return { ok: false, error: 'Gaming mode is on' };
-    if (chats.size || agent.busy || actions.busy || memoryRequests.busy) return { ok: false, error: 'One local reply at a time' };
-    if (actions.willHandle(messages?.at(-1)?.content||'')) return {ok:false,error:'Send action requests through the local task route.'};
+  ipcMain.handle('chat:send', async (event, request) => foreground.run(async () => {
+    if (event.sender !== overlay?.webContents) return { ok: false, error: 'Overlay required.' };
+    autonomy.touch();
+    const { id, messages } = request || {};
+    const current = messages?.at(-1);
+    if (!Number.isSafeInteger(id) || current?.role !== 'user' || typeof current.content !== 'string') return { ok: false, error: 'Invalid chat request.' };
+    if (projectRouting) return { ok: false, error: 'Finish choosing your project before sending a request.' };
+    if (chats.size || brain.busy || actions.busy) return { ok: false, error: 'One Capri request at a time.' };
     const abort = new AbortController();
     let finish;
-    const done = new Promise((resolve) => { finish = resolve; });
+    const done = new Promise(resolve => { finish = resolve; });
+    const stop = () => brain.cancel();
+    abort.signal.addEventListener('abort', stop, { once: true });
     chats.set(id, { abort, done });
     try {
-      const send = (text) => overlay?.webContents.send('chat:delta', { id, text });
-      // Re-route in the trusted main process as well: the renderer cannot bypass
-      // local memory commands and accidentally send an unconfirmed save to the AI.
-      const local = await personal.route(messages?.at(-1)?.content);
-      if (local.handled) return { ok: true, text: local.text };
-      if (/^\s*\/agent(?:\s|$)/i.test(messages?.at(-1)?.content || '')) return { ok: false, error: 'Use the local agent command route.' };
-      const augmented = capabilities.inject(await personal.augment(messages), config.load(), {
-        ...actions.grounding({includeApps:permissions(config.load().privacy).contextProcesses}),
-        memoryOperation: memoryRequests.status(),
-      });
-      abort.signal.throwIfAborted();
-      const text = await ollama.chat({ model: pickModel(), messages: augmented }, send, abort.signal);
+      const text = await brain.chat(current.content,
+        text => overlay?.webContents.send('chat:delta', { id, text }),
+        text => overlay?.webContents.send('task:progress', { id, text }));
       return { ok: true, text };
-    } catch (err) {
-      return { ok: false, error: abort.signal.aborted ? 'stopped' : err.message };
-    } finally {
-      chats.delete(id);
-      finish();
-    }
+    } catch (error) { return { ok: false, error: abort.signal.aborted ? 'stopped' : error.message }; }
+    finally { abort.signal.removeEventListener('abort', stop); chats.delete(id); finish(); }
   }));
-  ipcMain.on('chat:stop', (_e, id) => {
-    chats.get(id)?.abort.abort();
-    if (agent.busy) agent.cancel();
-    if (actions.busy) actions.cancel();
-    memoryRequests.cancel();
+  ipcMain.on('chat:stop', (event, id) => {
+    if (event.sender !== overlay?.webContents) return;
+    chats.get(id)?.abort.abort(); brain.cancel(); decisionBrain.cancel();
+    settingsRequests.cancel(); agent.cancel(); requests.cancel(); memoryRequests.cancel();
   });
-  ipcMain.handle('chat:startOllama', async () => {
-    if (config.load().gamingMode) return { ok: false, error: 'Resume from Gaming mode before starting Ollama.' };
-    // Manual retry from the Start Ollama button; starting the server never runs inference.
-    return ollamaRuntime.start();
-  });
-  ipcMain.on('chat:ollama', () => shell.openExternal(OLLAMA_SITE));
   // closing an app you asked her to close, once you've clicked to confirm (apps.js)
   const appInfo = (app) => app && { name: app.process, label: app.label };
   ipcMain.handle('apps:list', async () => config.load().desktopActions && !config.load().gamingMode
@@ -532,9 +753,11 @@ function registerIpc() {
     ? appInfo(await apps.find(wanted).catch(() => null)) : null);
   ipcMain.handle('apps:close', closeApp);
   // typing to her: the overlay takes the keyboard while the chat is open, and gives it back after
-  ipcMain.on('overlay:focus', (_e, on) => {
+  ipcMain.on('overlay:focus', (event, on) => {
+    if (!speechCaller(event)) return;
+    autonomy.touch();
     if (!overlay) return;
-    if (fullscreenState.active || config.load().gamingMode) return;
+    if ((fullscreenState.active || config.load().gamingMode) && !voiceSession) return;
     overlay.setFocusable(Boolean(on));
     if (on) overlay.focus();
     else overlay.blur();
@@ -646,11 +869,6 @@ function main() {
   if (process.platform === 'win32') app.setAppUserModelId('caprigpt.desktop');
 
   app.whenReady().then(() => {
-    // Prepare local chat without loading a model or delaying Capri's entrance.
-    // Existing Ollama servers are reused; absent installations keep the setup UI.
-    if (!config.load().gamingMode && ollamaRuntime.executable()) {
-      ollamaStartup = ollamaRuntime.start();
-    }
     serveProtocol();
     settingsRoom = createSettingsWindow({ state: settingsState, patch: updateConfig, action: settingsAction });
     registerIpc();
@@ -665,11 +883,14 @@ function main() {
     watchWindows();
     // Existing OS events only; at most one in-memory snapshot with a 60-second TTL.
     for (const [event, reason] of [['resume', 'resume'], ['on-ac', 'power-change'], ['on-battery', 'power-change']]) {
-      powerMonitor.on(event, () => { pcContext.onEvent(reason).catch(() => {}); agent.event(reason); });
+      powerMonitor.on(event, () => { pcContext.onEvent(reason).catch(() => {}); autonomy.touch(); });
     }
     // Apply expiry on startup even if no memory is recalled this run.
     if (fs.existsSync(path.join(app.getPath('userData'), 'personal-memory.sqlite'))) {
       try { memory(); } catch { console.error('[capri] Personal memory unavailable; other features remain available.'); }
+    }
+    if (fs.existsSync(path.join(app.getPath('userData'), 'companion-goals.sqlite'))) {
+      try { goals(); } catch { console.error('[capri] Saved goals unavailable.'); }
     }
     let previousConnection;
     try { previousConnection = JSON.parse(fs.readFileSync(connectionFile(), 'utf8')); } catch {}
@@ -680,7 +901,8 @@ function main() {
       integrationToken,
       onIntegrationStatus: async ({ verifyContext } = {}) => {
         const status = { ...codexEvents.snapshot(), runtime: runtime(), gamingMode: config.load().gamingMode,
-          visible: Boolean(overlay?.isVisible()), rendererReady: Boolean(overlay && !overlay.webContents.isLoading()) };
+          visible: Boolean(overlay?.isVisible()), rendererReady: Boolean(overlay && !overlay.webContents.isLoading()),
+          companion: autonomy.status(), cognition: { ...curiosity.status(), reflection: reflection.status() } };
         if (verifyContext) {
           // Fixed read-only diagnostic phrase. Never accept commands or prompt text
           // through the HTTP status endpoint, and never return app/window names.
@@ -712,19 +934,26 @@ function main() {
       fs.writeFileSync(target, JSON.stringify({ port: PORT, token: integrationToken }), { mode: 0o600 });
     });
     globalShortcut.register('Control+Alt+C', () => toggleVisible());
-    ollamaStartup.then(() => refreshModels()); // for her menu's model list
+    reflection.schedule();
+    const reflectionTimer = setInterval(() => reflection.schedule(), 60000);
+    reflectionTimer.unref(); app.once('before-quit', () => clearInterval(reflectionTimer));
+    for (const event of ['suspend', 'resume', 'lock-screen', 'unlock-screen']) powerMonitor.on(event, () => {
+      sessionAvailable = event === 'resume' || event === 'unlock-screen'; autonomy.touch(); reflection.cancel();
+    });
+    const presenceTimer = setInterval(() => autonomy.run().catch(() => {}), 15000);
+    presenceTimer.unref(); app.once('before-quit', () => clearInterval(presenceTimer));
     screen.on('display-metrics-changed', fitOverlay);
     screen.on('display-added', () => { fitOverlay(); rebuildTray(); });
     screen.on('display-removed', () => { fitOverlay(); rebuildTray(); });
   });
 
-  app.on('before-quit', () => { speech.cancel(); agent.cancel(); actions.cancel(); memoryRequests.cancel(); for (const { abort } of chats.values()) abort.abort(); });
+  app.on('before-quit', () => { autonomy.close(); reflection.close(); cognitiveBrain.cancel(); brain.cancel(); decisionBrain.cancel(); speech.cancel(true); tts.cancel(); agent.cancel(); requests.cancel(); memoryRequests.cancel(); for (const { abort } of chats.values()) abort.abort(); });
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     windowWatch?.stop();
     fullscreenWatch?.stop();
     clearTimeout(fullscreenHideTimer);
-    memoryStore?.close();
+    memoryStore?.close(); goalStore?.close(); curiosity?.close();
   });
   app.on('window-all-closed', (e) => e.preventDefault());
 }

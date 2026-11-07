@@ -4,6 +4,8 @@ Ask in ordinary chat. You do not need slash commands:
 
 - “Capri, open File Explorer.”
 - “Open Firefox.” (or another exact installed Start menu app name)
+- “Could you bring up Netflix using Firefox?”
+- “Pull up Wikipedia in Firefox.”
 - “Firefox.” also works as an installed-app launch shortcut, including after
   Capri asks which browser/app to open.
 - “Capri, play the newest Rubius video on YouTube.”
@@ -11,16 +13,21 @@ Ask in ordinary chat. You do not need slash commands:
 - “Find the best discounts on Steam.”
 - “Open the first one.” after a search
 
-`/do <task>` explicitly invokes the planner if the conversational router does not
-recognize a request. Close the chat to stop in-flight work. `/cancel` and
+`/do <task>` also invokes the planner. Ordinary requests use the same local intent
+interpreter, rather than needing a particular verb or phrase. Close chat to stop in-flight work. `/cancel` and
 `/agent cancel` also cancel tasks. Gaming mode cancels tasks and pauses the media
 in Capri Browser. Apps/pages already opened remain open after cancellation.
 
 ## What executes
 
-The main-process `ActionAgent` asks local Qwen 3.5 9B for a JSON plan, validates
-every call before starting, and executes at most four steps with a three-minute
-deadline. Tools accept names, short queries and indexes into observed results.
+The main-process `RequestInterpreter` first identifies intent and requested
+outcomes using local Qwen 3.5 9B. It then plans one tool step, calls `ActionAgent`
+to validate and execute it, and uses the observation for the next decision.
+Completion checks preserve browser constraints and stop completed effects from
+repeating. A failed tool can receive one correction within the same limits.
+At most four tool attempts and six planning decisions run under one three-minute
+deadline. See [REQUEST-INTERPRETATION.md](REQUEST-INTERPRETATION.md).
+Tools accept names, short queries and indexes into observed results.
 They cannot accept shell commands, JavaScript, arbitrary file paths or model-made
 URLs. Background observation events cannot invoke these action tools. Explicit
 requests take priority over background inference.
@@ -49,6 +56,11 @@ Reasoning stays local. Requested searches and website visits use the Internet:
   publication time, with source buttons. Headlines are not independently verified
   reporting or article summaries. Older/undated results are excluded.
 - **Web search:** public Bing RSS results, with source buttons.
+- **Websites in a browser:** named sites are searched first, then an observed
+  result is sent to the requested verified Firefox/Chrome/Edge/Brave executable
+  or the default browser. Explicit public HTTPS URLs can open directly.
+  There are no site-specific launch rules. Receipt text distinguishes sending
+  the URL from verifying page loading, sign-in or playback.
 - **Steam:** live featured specials directly from Steam’s public store endpoint,
   ordered by percentage discount. Prices/currency come from the Guatemala store
   region. This is a useful current shortlist, not a claim to have ranked every

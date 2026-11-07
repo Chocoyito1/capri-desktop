@@ -3,7 +3,8 @@
 // mane shards drifting off, the stars rising out of her mane, the satellite and the red light
 // she sends up to it, the windows she takes over, red lightning, speed lines, shockwaves, and
 // the cut-ins (real frames of her from the show).
-// Drawn on whole frames (24 fps) and only while something is alive.
+// Action drawings retain 24 fps; drifting particles and glyphs move at display cadence.
+// The loop runs only while something is alive.
 
 import { rand, pick, clamp } from './util.js';
 
@@ -378,7 +379,7 @@ export class FxLayer {
   }
 
   glyph(x, y) {
-    this.add({ type: 'glyph', life: rand(900, 1400), x: x + rand(-40, 40), y, text: pick(GLYPHS), drift: rand(-12, 12) });
+    this.add({ type: 'glyph', smooth: true, life: rand(900, 1400), x: x + rand(-40, 40), y, text: pick(GLYPHS), drift: rand(-12, 12) });
   }
 
   // One shard coming loose from the mane and floating away, slowly, outward and up.
@@ -386,6 +387,7 @@ export class FxLayer {
     const speed = rand(16, 34);
     this.add({
       type: 'drift',
+      smooth: true,
       life: rand(1900, 2900),
       x, y,
       vx: Math.cos(angle) * speed,

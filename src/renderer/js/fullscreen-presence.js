@@ -39,7 +39,7 @@ export class FullscreenPresence {
     if (active) this.capri.endAct(false);
     // Reuse the original red/violet teleport language, without piling up emitters.
     if (Math.abs(this.target - this.from) > 0.00001 && !reducedMotion.matches
-        && now - (this.lastEffect ?? -Infinity) > 120 && !this.capri.hidden) {
+        && now - (this.lastEffect ?? -Infinity) > 120 && !this.capri.hidden && !this.capri.gaming) {
       this.lastEffect = now;
       const head = this.capri.head();
       const ground = this.capri.pos.y;

@@ -32,6 +32,7 @@
     "test:chrome-live": "electron scripts/smoke-electron.js --chrome-context-live",
     "test:context-live": "node scripts/smoke-context-live.js",
     "test:conversation-live": "node scripts/check-conversation.js",
+    "test:requests-live": "node scripts/check-request-routing.js",
     "test:memory-language": "electron scripts/smoke-electron.js --memory-language-only",
     "test:memory-language-live": "node scripts/smoke-memory-language-live.js",
     "test:foreground-priority": "electron scripts/smoke-electron.js --foreground-priority"
@@ -55,7 +56,6 @@
     "@fontsource/chakra-petch": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "fast-xml-parser": "5.11.2",
-    "fflate": "0.8.3",
     "koffi": "3.3.4"
   },
   "build": {

@@ -2,6 +2,14 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
+const {spawn}=require('node:child_process');
+const {publicUrl}=require('./web-tools');
+async function launchBrowser(file,url) {
+  await new Promise((resolve,reject)=>{
+    const child=spawn(file,[url],{shell:false,windowsHide:true,detached:true,stdio:'ignore'});
+    child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});
+  });
+}
 const normalize=value=>String(value).normalize('NFD').replace(/\p{M}/gu,'').toLowerCase().replace(/[^a-z0-9]/g,'');
 const BUILTINS={
   explorer:{label:'File Explorer',file:'explorer.exe',process:'explorer',aliases:['fileexplorer','explorer','exploradordearchivos']},
@@ -36,20 +44,29 @@ function installedShortcuts() {
       if(!entry.isFile()||path.extname(entry.name).toLowerCase()!=='.lnk')continue;
       const label=path.basename(entry.name,'.lnk');
       if(/uninstall|desinstal|powershell|command prompt|terminal|registry|regedit|reset|restore|cleanup|update|installer|setup|capri/i.test(label))continue;
-      const real=fs.realpathSync(file);if(!real.toLowerCase().startsWith(root.toLowerCase()+path.sep))continue;
+      let real;try{real=fs.realpathSync(file);}catch{continue;}
+      if(!real.toLowerCase().startsWith(root.toLowerCase()+path.sep))continue;
       rows.push({label:label.slice(0,100),file:real,id:crypto.createHash('sha256').update(real).digest('hex').slice(0,12)});
     }
   }
-  for(const root of roots)walk(root,fs.existsSync(root)?fs.realpathSync(root):root);
+  for(const root of roots){
+    let real;try{real=fs.existsSync(root)?fs.realpathSync(root):root;}catch{continue;}
+    walk(root,real);
+  }
   // Windows may install a per-user and a machine-wide shortcut with the same
   // name. Prefer the per-user one, matching Start menu precedence.
   return [...rows.reduce((map,row)=>{if(!map.has(normalize(row.label)))map.set(normalize(row.label),row);return map;},new Map()).values()];
 }
 class DesktopTools {
-  constructor({openPath, native, shortcuts=installedShortcuts, executables=standardExecutables, systemRoot=process.env.SystemRoot||'C:\\Windows',now=Date.now}) { Object.assign(this,{openPath,native,shortcuts,executables,systemRoot,now}); }
-  entries() {
+  constructor({openPath, openExternal, launch=launchBrowser, native, shortcuts=installedShortcuts, executables=standardExecutables, systemRoot=process.env.SystemRoot||'C:\\Windows',now=Date.now,cacheMs=30000}) { Object.assign(this,{openPath,openExternal,launch,native,shortcuts,executables,systemRoot,now,cacheMs}); }
+  entries({fresh=false}={}) {
+    const at=this.now();
+    if(!fresh&&this.cached&&at-this.cached.at<this.cacheMs)return this.cached.rows;
+    this.cached=null;
     const rows=[...this.shortcuts().map(app=>({...app,source:'Windows Start menu shortcut'})),...this.executables()];
-    return [...rows.reduce((map,row)=>{const key=(APP_ALIASES.find(group=>group.includes(normalize(row.label)))||[normalize(row.label)])[0];if(!map.has(key))map.set(key,row);return map;},new Map()).values()];
+    const result=[...rows.reduce((map,row)=>{const key=(APP_ALIASES.find(group=>group.includes(normalize(row.label)))||[normalize(row.label)])[0];if(!map.has(key))map.set(key,row);return map;},new Map()).values()];
+    this.cached={at,rows:result};
+    return result;
   }
   catalog(){return [...new Set([...Object.values(BUILTINS).map(app=>app.label),...this.entries().map(app=>app.label)])].slice(0,80);}
   evidence() {
@@ -68,7 +85,7 @@ class DesktopTools {
     else {
       const names=new Set(APP_ALIASES.find(group=>group.includes(key))||[key]);
       try {
-        const rows=this.entries();const exact=rows.filter(app=>names.has(normalize(app.label)));
+        const rows=this.entries({fresh:record});const exact=rows.filter(app=>names.has(normalize(app.label)));
         const suggested=record&&key.length>=4?rows.filter(app=>{
           const label=normalize(app.label),aliases=APP_ALIASES.find(group=>group.includes(label))||[label];
           return aliases.some(name=>name.includes(key)||distance(name,key)<=2);
@@ -81,6 +98,25 @@ class DesktopTools {
   }
   matchName(query) {
     const result=this.resolve(query);return result.status==='found'?result.target.label:null;
+  }
+  async openUrl(value,browser='default',signal) {
+    const url=publicUrl(value);signal?.throwIfAborted();
+    let label='your default browser';
+    if(!browser||browser==='default') {
+      if(!this.openExternal)throw Error('The default browser launcher is unavailable.');
+      await this.openExternal(url);
+    } else {
+      const key=normalize(browser);
+      const group=APP_ALIASES.find(names=>names.includes(key))||[key];
+      const executable=this.executables().find(row=>group.includes(normalize(row.label))
+        &&/^(?:firefox|chrome|msedge|brave|opera|vivaldi)\.exe$/i.test(path.basename(row.file)));
+      if(!executable)throw Error(`I couldn’t find a verified browser executable for “${browser}”. Give me another installed browser or choose the default browser.`);
+      label=executable.label;
+      signal?.throwIfAborted();await this.launch(executable.file,url);
+    }
+    signal?.throwIfAborted();
+    return {type:'website',title:url,browser:label,launchRequested:true,
+      note:`Sent ${url} to ${label}. Page loading, sign-in and playback have not been verified.`};
   }
   async open(query,signal) {
     if(typeof query!=='string'||/[\\/:]|--|[\r\n]/.test(query))throw Error('Use an app name, without commands or file paths.');

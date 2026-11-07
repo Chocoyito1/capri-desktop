@@ -1,15 +1,25 @@
-> **Conversation update:** Capri keeps her warm, mischievous personality with less recurring lore, fuller practical answers, and a larger local conversation window. See [PERSONALITY-AND-CONTINUITY.md](PERSONALITY-AND-CONTINUITY.md) for the changes, research, limits and checks. Restart Capri to load this update.
->
-> **Desktop tasks:** Ask Capri to open apps, play a creator’s newest YouTube upload, find current AI news or check Steam discounts. Requests run through local Qwen and real tools, with progress and source buttons. [DESKTOP-TASKS.md](DESKTOP-TASKS.md) explains the supported actions and checks.
+# CapriGPT — Codex desktop agent (development)
 
-> **New control room:** Right-click Capri or her tray icon for the custom settings window. Appearance, sound, memory, PC awareness, connections and updates now have their own sections. See [CONTROL-ROOM.md](CONTROL-ROOM.md). Qwen 3.5 9B is the default local brain.
+Capri now uses Codex CLI for requested work and tool-free background reasoning
+for companion conversations and private inquiry. Foreground tasks can use Codex command/file/web tools,
+configured CLI connections, actual screen snapshots and native desktop input.
+Normal social dialogue is generated from her personality and current context.
 
-> **CapriGPT local prototype:** Start with [START-HERE.md](START-HERE.md) for Windows setup, safety, gaming mode, and licensing. [ROADMAP.md](ROADMAP.md) covers planned OpenAI/Codex integrations. The upstream README below describes the original Capri application.
+Choose a workspace in **Control room → Connections → Project companion**.
+[Project companion](docs/PROJECT-COMPANION.md) keeps project goals, decisions and
+reported outcomes separate, and can save recognized command-exit receipts when
+Memory is enabled. Selecting a folder does not start work or approve actions.
 
-> **Personal memory and PC context:** Right-click Capri → **Memory & PC privacy**
-> for confirmed local memories, search/edit/forget, retention/export/delete and
-> optional on-demand PC snapshots. [MEMORY-AND-CONTEXT.md](MEMORY-AND-CONTEXT.md)
-> documents setup, privacy limits and tests. This branch requires Node.js 22.13+.
+See [AGENT-PRESENCE.md](docs/AGENT-PRESENCE.md) for implemented behavior, screen/cloud
+data flow, controls, limits and validation. This is an unreleased implementation;
+live screen/control acceptance is still pending. Restart Capri to load changes.
+
+Development follows [CONTRIBUTING.md](CONTRIBUTING.md),
+[DEVELOPMENT.md](docs/DEVELOPMENT.md) and [RELEASING.md](docs/RELEASING.md).
+Earlier Qwen/request-routing documents describe the previous architecture.
+
+The inherited upstream README follows; its Claude/Ollama behavior is historical
+and does not describe this fork's current reasoning backend.
 
 **English** · [Français](README.fr.md)
 

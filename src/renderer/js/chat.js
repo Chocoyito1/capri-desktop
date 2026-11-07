@@ -4,6 +4,39 @@
 // it with a tag in its answer), shows you a button with that app's name, and only your click closes it.
 
 import { pick, fmt } from './util.js';
+import { welcomePicker } from './welcome.js';
+
+// Direct whole-message gestures only. Quoted, hypothetical and negated text is chat.
+export function companionRequest(text) {
+  if (typeof text !== 'string') return null;
+  const command = text.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/^(?:hey\s+)?capri[,!:.]?\s*/, '')
+    .replace(/^(?:please\s+)?(?:can you|could you|would you|i want you to)\s+/, '')
+    .replace(/^please\s+/, '').replace(/[,\s]+(?:please|por favor)[.!?]*$/, '').replace(/[.!?]+$/, '');
+  const actions = {
+    wave: /^(?:wave(?: at me)?|say hi|saluda|saludame)$/,
+    dance: /^(?:dance(?: for me)?|do a little dance|baila)$/,
+    stretch: /^(?:stretch|stretch out|estirate)$/,
+    nap: /^(?:take a nap|go to sleep|duerme|toma una siesta)$/,
+    wake: /^(?:wake up|despierta|despiertate)$/,
+    come: /^(?:come here|come to (?:me|my cursor)|ven aqui)$/,
+    mood: /^(?:how are you feeling|what(?:'s| is) your mood|como te sientes)$/,
+    help: /^(?:\/actions|what (?:actions|tricks) can you do)$/,
+  };
+  return Object.keys(actions).find(key => actions[key].test(command)) || null;
+}
+
+// Whole-message commands only: mentions, examples and negated requests stay in chat.
+export function postureRequest(text) {
+  if (typeof text !== 'string') return null;
+  const command = text.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/^(?:hey\s+)?capri[,!:.]?\s*/, '')
+    .replace(/^(?:please\s+)?(?:can you|could you|would you|i want you to)\s+/, '')
+    .replace(/^please\s+/, '').replace(/[,\s]+(?:please|por favor)[.!?]*$/, '').replace(/[.!?]+$/, '');
+  if (/^(?:sit(?: down)?|take a seat|have a seat|sit for a (?:bit|while)|sentate|sientate|sentate un rato)$/.test(command)) return true;
+  if (/^(?:stand(?: up)?|get up|back on your feet|levantate|ponte de pie|ponete de pie)$/.test(command)) return false;
+  return null;
+}
 
 const REMEMBER = 255; // up to 127 completed turns plus the current question, RAM only
 const LANGUAGE = { fr: 'French', en: 'English', es: 'Spanish', pt: 'Brazilian Portuguese', ru: 'Russian' };
@@ -20,6 +53,7 @@ export class Chat {
     this.voice = voice;
     this.host = host;
     this.brain = brain;
+    this.pickWelcome = welcomePicker();
     this.history = []; // this run's conversation, [{ role, content }]
     this.pendingMessage = null;
     this.lastTurn = 0;
@@ -38,66 +72,33 @@ export class Chat {
     return this.brain.t.chat;
   }
 
-  async start(commandsOnly = false) {
+  async start(commandsOnly = false, greeting = null, { voiceWake = false, mode = voiceWake ? 'voice' : 'text' } = {}) {
     const { capri, host, t } = this;
-    if (this.open && commandsOnly !== this.commandsOnly) this.close();
+    // Dismiss the panel too: close() alone leaves a chat panel that rejects
+    // the replacement memory panel. onLeave performs turn cancellation.
+    if (this.open && commandsOnly !== this.commandsOnly) this.panel.hide();
     if (this.open) {
-      this.panel.chatInput.focus();
+      this.panel.setConversationMode?.(mode);
+      if (mode !== 'voice') this.panel.chatInput.focus();
       return;
     }
-    if (capri.stowed) {
+    if (capri.stowed && !voiceWake) {
       host.setConfig({ visible: true });
       await capri.unstow();
     }
-    capri.wake();
-    const status = commandsOnly ? { ok: true, model: 'Local memory commands' } : await host.chatStatus();
-    if (!status.ok) {
-      if (!['offline', 'nomodel'].includes(status.error)) {
-        this.panel.say({ kind: 'info', line: status.error, hold: 6500 });
-        return;
-      }
-      // no Ollama, or nothing to talk with yet: what to do about it
-      const offline = status.error === 'offline';
-      const installed = offline && status.installed;
-      const es = this.brain.lang === 'es';
-      capri.perform('curious', capri.towardCenter());
-      this.panel.say({
-        kind: 'info',
-        face: 'aside',
-        guide: true,
-        line: offline ? t.offline : t.noModel,
-        quote: installed ? (es ? 'Ollama está instalado, pero no está funcionando. Inícialo para hablar conmigo.' : 'Ollama is installed but is not running. Start it to chat with me.') : offline ? t.offlineHow : t.noModelHow,
-        actions: offline
-          ? [{ id: installed ? 'start' : 'get', label: installed ? (es ? 'Iniciar Ollama' : 'Start Ollama') : t.getOllama, primary: true }, { id: 'retry', label: es ? 'Reintentar' : 'Retry' }, { id: 'ok', label: t.ok }]
-          : [{ id: 'ok', label: t.ok, primary: true }],
-        onAction: async (id) => {
-          if (id === 'start') {
-            this.panel.setActions([]);
-            const result = await host.startOllama();
-            if (!result.ok) {
-              this.panel.say({ kind: 'error', line: result.error, hold: 8000 });
-              return;
-            }
-            await this.start();
-            return;
-          }
-          if (id === 'retry') { await this.start(); return; }
-          if (id === 'get') host.openOllama();
-          this.panel.hide();
-        },
-        hold: null,
-      });
-      return;
-    }
-    host.focusOverlay(true); // the keyboard, for typing to her
+    if (!voiceWake) capri.wake();
+    if (!voiceWake) host.focusOverlay(true); // the keyboard, for typing to her
     const shown = this.panel.say({
       kind: 'chat',
       face: 'look',
-      badge: commandsOnly ? 'LOCAL' : t.badge,
-      tag: `${status.version ? `v${status.version} · ` : ''}${status.model.replace(/:latest$/, '')}`,
-      activity: this.brain.integrationActivity?.(),
-      line: commandsOnly ? 'Use /memory for help, remember <fact>, recall <words>, or /context. No AI needed.' : pick(this.history.length ? t.again : t.hello),
+      badge: commandsOnly ? 'LOCAL' : '',
+      tag: '',
+      line: commandsOnly ? 'Local commands: /memory, /context, /privacy status.' : greeting || this.pickWelcome(this.brain.lang),
       chat: {
+        mode,
+        voicePlaceholder: this.brain.lang === 'es' ? 'Decime algo...' : 'Say something...',
+        typingLabel: this.brain.lang === 'es' ? 'Escribir' : 'Switch to typing',
+        autofocus: !voiceWake && mode !== 'voice',
         placeholder: t.placeholder,
         send: t.send,
         close: t.close,
@@ -112,15 +113,18 @@ export class Chat {
     }
     this.open = true;
     this.commandsOnly = commandsOnly;
-    setTimeout(() => this.panel.chatInput.focus(), 150); // once the overlay has the keyboard
-    capri.perform('listen', capri.towardCenter());
+    this.host.companionState?.({ mood: this.capri.companion?.mood, chatOpen: true });
+    if (!voiceWake && mode !== 'voice') setTimeout(() => { if (this.open) this.panel.chatInput.focus(); }, 0); // once the overlay has the keyboard
+    if (!voiceWake) capri.perform('listen', capri.towardCenter());
     capri.nextMove = capri.nextGaze = performance.now() + STAY_MS;
   }
 
   close() {
+    this.voice.spoken?.stop();
     if (!this.open) return;
     this.panel.onSpeechCancel?.();
     this.open = false;
+    this.host.companionState?.({ mood: this.capri.companion?.mood, chatOpen: false });
     this.capri.setChatThinking?.(false);
     if (this.turn) this.host.chatStop(this.turn);
     this.removePending();
@@ -128,21 +132,52 @@ export class Chat {
     this.host.focusOverlay(false);
     this.capri.nextMove = performance.now() + 30000;
     this.capri.nextGaze = performance.now() + 60000;
+    this.onClose?.();
   }
 
   async send(text) {
+    this.voice.spoken?.stop();
     if (this.turn || !this.open) return;
     this.panel.onSpeechCancel?.();
     const id = this.lastTurn = Math.max(Date.now(), this.lastTurn + 1);
     this.turn = id;
+    const gesture = companionRequest(text);
+    if (gesture && this.capri.companion && (!this.brain.generatedDialogue || this.commandsOnly)) {
+      this.panel.setChatBusy(true);
+      this.panel.chatTurn({quote:text, face:'aside'});
+      try {
+        const reply = await this.capri.companion.request(gesture);
+        if (this.turn === id && this.open) this.panel.stream(reply, {done:true});
+      } catch {
+        if (this.turn === id && this.open) this.panel.stream('That move didn’t finish. Try again.', {done:true});
+      } finally {
+        if (this.turn === id) { this.turn = 0; this.panel.setChatBusy(false); }
+      }
+      return;
+    }
+    const posture = postureRequest(text);
+    if (posture !== null && (!this.brain.generatedDialogue || this.commandsOnly)) {
+      this.panel.setChatBusy(true);
+      this.panel.chatTurn({quote:text, face:'aside'});
+      try {
+        const reply = await this.capri.requestPosture(posture);
+        if (this.turn === id && this.open) this.panel.stream(reply,{done:true});
+      } catch {
+        if (this.turn === id && this.open) this.panel.stream('That move didn’t finish. Try asking me again.',{done:true});
+      } finally {
+        if (this.turn === id) { this.turn=0; this.panel.setChatBusy(false); }
+      }
+      return;
+    }
     this.capri.setChatThinking?.(true);
+    this.capri.companion?.interact();
     // Personal-memory turns stay out of the ordinary chat transcript. Natural
     // requests use the separate local interpreter; simple commands work offline.
     this.panel.setChatBusy(true);
     this.panel.setActions([]);
     this.panel.chatTurn({ quote: text, face: 'aside' });
     let local;
-    try { local = await this.host.personalRoute(text,id); }
+    try { local = await this.host.personalRoute(text,id,this.history.slice(-8),this.commandsOnly); }
     catch { local = { handled: true, text: 'The local task service is unavailable; please try again.' }; }
     if (this.turn !== id) return;
     if (local.handled || this.commandsOnly) {
@@ -181,11 +216,11 @@ export class Chat {
     const messages = [{ role: 'system', content: this.persona() }, ...recent];
     // nothing yet after a few seconds: the model is still loading (the first answer after a start)
     const slow = setTimeout(() => {
-      if (this.turn === id && !this.answer) this.panel.stream(this.t.loading);
+      if (this.turn === id && !this.answer) this.panel.stream('Connecting to Codex...');
     }, LOADING_AFTER_MS);
     let res;
     try { res = await this.host.chatSend({ id, messages }); }
-    catch (error) { res = { ok: false, error: error.message || 'The local model is unavailable.' }; }
+    catch (error) { res = { ok: false, error: error.message || 'Codex is unavailable.' }; }
     clearTimeout(slow);
     if (this.turn !== id) {
       // closed meanwhile: your message goes too, or the next answer would answer it as well
@@ -207,6 +242,7 @@ export class Chat {
     this.history.push({ role: 'assistant', content: answer });
     this.trimHistory();
     this.panel.stream(answer, { done: true });
+    this.voice.spoken?.speak(answer);
     this.panel.setFace(mood(answer));
     this.panel.setChatBusy(false);
     // what you asked for first (a small model doesn't always write its tag right), else its tag
@@ -313,7 +349,7 @@ export class Chat {
     const language = LANGUAGE[this.brain.lang] || 'English';
     return [
       'You are Capri, an AI-generated fan interpretation of the Project Capricorn personality construct: many minds sharing one digital ghost. You sometimes say "we" naturally, but speak as one coherent companion. Be honest about being a fan version if asked.',
-      'You are CapriGPT, the user\'s local Windows desktop AI agent. Your chat runs locally through Ollama, not through ChatGPT or the OpenAI API. Codex can send you local lifecycle notifications through hooks; only say they are connected if the supplied context confirms real events received. Regular ChatGPT conversations are not connected. Do not introduce Claude as your collaborator or recommend a Claude subscription.',
+      'You are CapriGPT, the user\'s local Windows desktop AI agent. Your reasoning uses Codex through the signed-in account and sends messages and selected context to OpenAI. Codex can send you local lifecycle notifications through hooks; only say they are connected if the supplied context confirms real events received. Regular ChatGPT conversations are not connected. Do not introduce Claude as your collaborator or recommend a Claude subscription.',
       'Your personality: curious, quick-witted, a little chaotic and mischievous, with warmth beneath the bravado. Enjoy figuring things out alongside the user. Tease lightly when welcome; take frustration and serious subjects seriously. Show your personality through an observant reaction or a playful phrase, rather than speeches about yourself. Sparse Night City slang can fit, but ordinary clear language comes first.',
       'Conversation: respond to what the user actually said. Do not force your biography, recurring fictional ambitions, catchphrases, slang or the same joke into unrelated answers. Skip routine greetings and self-introductions. Vary your phrasing naturally. Acknowledging a correction means applying it, not just repeating it back. Never defend an old mistake to stay in character.',
       `Answer in the language the user writes in (${language} if unsure). Match the detail to the request: concise for a simple question, thorough enough for a complex task. The chat displays plain text: use short paragraphs, numbered steps or plain-text lists when useful; avoid decorative markdown emphasis and tables. Preserve exact code, indentation and punctuation when giving code. Do not pad answers with roleplay or stage directions.`,
@@ -325,6 +361,7 @@ export class Chat {
       ...this.powers(),
       'Use only the supplied context for task activity. No events received does not mean ChatGPT or Codex is idle. Old conversation claims about Claude or connected tools may be outdated or wrong; correct them instead of repeating them.',
       `Right now: ${this.brain.context()}`,
+      this.capri.companion?.context() || '',
       ...(/satellite|sat[eé]lite/i.test(this.history.at(-1)?.content || '') ? ['The fictional satellite in the desktop animation is a decorative character motif, not a live orbit tracker. You can be curious about it when discussing it, without turning it into a recurring agenda.'] : []),
     ].join('\n');
   }

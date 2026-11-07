@@ -92,8 +92,8 @@ export class Guide {
       face: 'look',
       line: spanish ? 'Soy CapriGPT, tu compañera para trabajar con ChatGPT y Codex.' : 'I’m CapriGPT, your companion for working with ChatGPT and Codex.',
       quote: spanish
-        ? 'Conversamos localmente con Ollama. Puedo recibir avisos de Codex cuando revises y confíes en los hooks. Las aprobaciones se responden en Codex. Los chats normales de ChatGPT no están conectados. El modo juego pausa la IA y me oculta.'
-        : 'We chat locally through Ollama. I can receive Codex notifications after you review and trust the hooks. Answer approvals in Codex. Regular ChatGPT chats are not connected. Gaming mode pauses AI and hides me.',
+        ? 'Conversamos con Codex; los mensajes y el contexto seleccionado se envían a OpenAI. Puedo recibir avisos de Codex cuando revises y confíes en los hooks. Las aprobaciones se responden en Codex. Los chats normales de ChatGPT no están conectados. El modo juego pausa la IA y me oculta.'
+        : 'We chat through Codex; messages and selected context are sent to OpenAI. I can receive Codex notifications after you review and trust the hooks. Answer approvals in Codex. Regular ChatGPT chats are not connected. Gaming mode pauses AI and hides me.',
       actions: [{ id: 'icon', label: this.t.topics.icon, primary: true }, { id: 'close', label: this.t.ok }],
     });
     if (id === 'icon') await this.icon();

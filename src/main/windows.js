@@ -19,7 +19,7 @@ function startWindowWatch({ overlay, onUpdate }) {
       }).filter(w => w.x < bounds.width && w.x + w.w > 0 && w.y < bounds.height && w.y + w.h > 0);
       const result = { fg: snapshot.fg, wins }, serialized = JSON.stringify(result);
       if (serialized !== previous) { previous = serialized; onUpdate(result); }
-    } catch { clearInterval(timer); }
+    } catch { /* Skip transient Win32/display errors and retry on the next tick. */ }
   };
   timer = setInterval(tick, 250);
   tick();

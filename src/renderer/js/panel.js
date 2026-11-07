@@ -52,6 +52,8 @@ export class Panel {
     this.chatInput = panel.querySelector('.panel__input');
     this.chatSend = panel.querySelector('.panel__send');
     this.chatClose = panel.querySelector('.panel__close');
+    this.chatTyping = panel.querySelector('.panel__typing');
+    this.chatTyping?.addEventListener('click', event => { event.stopPropagation(); this.onTyping?.(); this.setConversationMode('text'); this.onFocus?.(); this.chatInput.focus(); });
     this.note = panel.querySelector('.panel__note');
     this.chatForm.addEventListener('click', (e) => { this.onFocus?.(); e.stopPropagation(); });
     this.chatForm.addEventListener('submit', (e) => {
@@ -59,12 +61,19 @@ export class Panel {
       const text = this.chatInput.value.trim();
       if (!text || this.chatInput.disabled || this.chatInput.readOnly) return;
       this.chatInput.value = '';
+      this.chatInput.scrollTop = 0;
+      this.resizeChatInput();
       this.current?.onSend?.(text);
     });
     this.chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.hide();
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        if (!this.chatInput.disabled && !this.chatInput.readOnly) this.chatForm.requestSubmit();
+      }
     });
-    this.chatClose.addEventListener('click', () => this.hide());
+    this.chatInput.addEventListener('input', () => { this.resizeChatInput(); this.place(); });
+    this.chatClose.addEventListener('click', event => { event.stopPropagation(); this.hide(); });
 
     this.el.addEventListener('click', () => {
       if (this.current?.chat) { this.onFocus?.(); this.chatInput.focus(); } // a chat stays until you close it
@@ -74,6 +83,23 @@ export class Panel {
 
   get visible() {
     return !this.el.hidden && !this.suspended && !this.leaving;
+  }
+
+  resizeChatInput() {
+    const input = this.chatInput;
+    if (this.chatForm?.dataset && input) this.chatForm.dataset.hasDraft = String(Boolean(input.value.trim()));
+    if (!input || this.chatForm.hidden || !input.clientWidth) return;
+    const width = input.getBoundingClientRect().width;
+    if (this.chatInputSize?.width === width && this.chatInputSize?.text === input.value) return;
+    this.chatInputSize = { width, text: input.value };
+    const { scrollTop } = input;
+    // Measure at one row so deleting or replacing text can shrink the composer.
+    input.style.height = '32px';
+    input.style.overflowY = 'hidden';
+    const height = Math.min(68, Math.max(32, input.scrollHeight + 2));
+    input.style.height = `${height}px`;
+    input.style.overflowY = height === 68 && input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
+    input.scrollTop = scrollTop;
   }
 
   // Message: { kind, line, tag, quote, reply, summary, log: [{verb, target, error}], actions, guide,
@@ -108,6 +134,7 @@ export class Panel {
       if (PRIORITY[msg.kind] >= 3) this.missed = { ...msg, missedAt: performance.now() };
       return false;
     }
+    clearTimeout(this.leaveTimer);
     if (cur && this.visible) this.onDismiss?.(cur);
     cur?.onLeave?.();
     this.current = { ...msg, at: performance.now() };
@@ -245,15 +272,21 @@ export class Panel {
   renderChat(chat) {
     if (!chat) this.onSpeechCancel?.();
     this.el.classList.toggle('is-chat', Boolean(chat));
+    this.el.classList.toggle('is-voice', Boolean(chat && chat.mode === 'voice'));
+    this.el.classList.remove('has-chat-turn');
     this.line.classList.remove('is-streaming');
     this.chatForm.hidden = !chat;
     this.note.hidden = !chat?.note;
     if (!chat) return;
+    const speechStatus = this.el.querySelector('.panel__dictation-status');
+    if (speechStatus) { speechStatus.hidden = true; speechStatus.textContent = ''; }
     this.chatInput.placeholder = chat.placeholder;
     this.chatInput.setAttribute('aria-label', chat.placeholder);
     this.chatInput.disabled = false;
     this.chatSend.disabled = false;
-    this.chatSend.textContent = chat.send;
+    this.chatSend.innerHTML = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+    this.chatSend.setAttribute('aria-label', chat.send); this.chatSend.title = chat.send;
+    this.setConversationMode(chat.mode || 'text');
     this.chatClose.setAttribute('aria-label', chat.close);
     this.note.replaceChildren();
     if (chat.note) {
@@ -261,13 +294,30 @@ export class Panel {
       tag.textContent = chat.noteTag || '';
       this.note.replaceChildren(tag, ` ${chat.note}`);
     }
-    requestAnimationFrame(() => this.chatInput.focus());
+    if (chat.autofocus !== false) requestAnimationFrame(() => this.chatInput.focus());
+  }
+
+  setConversationMode(mode) {
+    if (!this.current?.chat) return;
+    const voice = mode === 'voice';
+    this.current.chat.mode = voice ? 'voice' : 'text';
+    this.el.classList.toggle('is-voice', voice);
+    if (this.chatTyping) {
+      this.chatTyping.hidden = !voice;
+      const label = this.current.chat.typingLabel || 'Switch to typing';
+      this.chatTyping.setAttribute('aria-label', label); this.chatTyping.title = label;
+    }
+    this.chatInput.placeholder = voice ? (this.current.chat.voicePlaceholder || 'Say something...') : this.current.chat.placeholder;
+    this.chatInput.setAttribute('aria-label', this.chatInput.placeholder);
+    this.chatInputSize = null;
+    this.place();
   }
 
   // A chat turn: what you said goes up top, her answer starts coming in under it (stream), without
   // announcing the panel all over again.
   chatTurn({ quote, face }) {
     if (!this.current?.chat) return;
+    this.el.classList.add('has-chat-turn');
     clearInterval(this.decodeTimer);
     this.setFace(face);
     this.quote.textContent = quote;
@@ -350,32 +400,36 @@ export class Panel {
   }
 
   hide() {
+    if (this.el.hidden || this.leaving) return;
+    const gone = this.current;
+    // Preserve the conversation card's height while mic cleanup clears its status.
+    if (gone?.chat) this.el.style.setProperty('--closing-height', `${this.el.offsetHeight}px`);
+    this.current = null;
+    this.leaving = true;
+    this.el.classList.remove('is-entering');
+    if (!reducedMotion.matches) this.el.classList.add('is-leaving');
     this.onSpeechCancel?.();
     this.animatedPortrait.setActive(false);
     clearTimeout(this.hideTimer);
     clearInterval(this.decodeTimer);
     this.onTalk?.(false);
-    if (this.el.hidden || this.leaving) return;
-    const gone = this.current;
-    this.current = null;
-    this.leaving = true;
     if (gone) {
       this.onDismiss?.(gone);
       gone.onLeave?.();
     }
-    // what Claude said while you were talking with her, now that you're done
     const missed = gone?.chat && this.missed;
     this.missed = null;
     if (missed && performance.now() - missed.missedAt < 120000) setTimeout(() => this.say(missed), 400);
-    if (reducedMotion.matches) {
+    const finish = () => {
+      if (!this.leaving) return;
       this.el.hidden = true;
-    } else {
-      this.el.classList.add('is-leaving');
-      setTimeout(() => {
-        if (this.leaving) this.el.hidden = true;
-      }, 150);
+      this.onHidden?.();
+    };
+    if (reducedMotion.matches) finish();
+    else {
+      const duration = gone?.chat ? (gone.chat.mode === 'voice' ? 180 : 160) : 150;
+      this.leaveTimer = setTimeout(finish, duration);
     }
-    // back to the ticker if Claude is still busy
     if (this.tickerAction) this.setTicker(this.tickerAction);
   }
 
@@ -474,6 +528,7 @@ export class Panel {
 
   // Sit on the tips of her mane, leaning toward the middle of the screen; tail points at her.
   place() {
+    if (!this.el.hidden) this.resizeChatInput();
     const { x, y, top: crown = y - 80, lean = 0 } = this.anchor;
     const { w } = this.view;
     const margin = 14;

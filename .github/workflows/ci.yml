@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main, development, 'platform/**', 'feature/**', 'fix/**', 'hotfix/**', 'codex/**']
+  pull_request:
+    branches: [main, development, 'platform/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Package Windows x64 without publishing
+        run: npx electron-builder --win --x64 --dir --publish never
