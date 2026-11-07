@@ -42,6 +42,8 @@ test('launcher opens synchronously, clamps to screen, hits only circles and forw
   assert.deepEqual(focus, [true], 'Opening voice preserves focus so a synthetic blur cannot cancel the microphone');
   menu.toggle(); events.keydown({ key: 'Escape', preventDefault() {} }); assert.equal(menu.visible, false);
   menu.toggle(); capri.dragging = true; menu.place(); assert.equal(menu.visible, false);
+  assert.equal(focus.at(-1), true, 'Hiding the launcher for pickup must preserve pointer capture instead of blurring');
+  const focusChanges = focus.length;
   capri.dragging = false; capri.fullscreen = true; menu.toggle(); assert.equal(menu.visible, false);
-  assert.equal(focus.at(-1), false);
+  assert.equal(focus.length, focusChanges, 'Fullscreen does not open or focus the launcher');
 });

@@ -11,6 +11,7 @@ const DEFAULTS = {
   screenAwareness: true,
   autonomyEnabled: true,
   cognitiveEnabled: true,
+  interestsEnabled: true,
   proactiveEnabled: true,
   autonomyScreen: true,
   autonomyIntervalSeconds: 90,

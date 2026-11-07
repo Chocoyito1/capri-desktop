@@ -66,6 +66,11 @@ cannot capture screenshots, click, execute commands or change personal memories.
 The older `autonomy.js` observer remains in the repository but is not constructed
 by `main.js`; its 90-second/twelve-attempt screen loop is not the active runtime.
 
+[Chosen interests](COMPANION-INTERESTS.md) add a bounded daily choice/refinement of
+a creative focus within an existing conversation opportunity. These stay separate
+from user goals and personal facts and can guide later conversation. PC awareness
+includes review/disable controls; pauses and dismissals are respected.
+
 Foreground requests cancel pending background reasoning. Locked/suspended
 sessions, dictation and fullscreen block reflection and conversation. Conversation
 also waits while hidden, chat is open, presentation cannot speak or the user has

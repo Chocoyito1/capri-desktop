@@ -6,7 +6,7 @@ const { PERSONA } = require('./personality');
 
 function packContext(data, budget = 16000) {
   const packed = Object.create(null), omitted = [];
-  const priority = ['currentProject', 'savedGoals', 'presentation', 'capabilities'];
+  const priority = ['currentProject', 'savedGoals', 'companionInterests', 'presentation', 'capabilities'];
   const keys = [...new Set([...priority, ...Object.keys(data)])].filter(key => Object.hasOwn(data, key));
   // Reserve room to report omissions; never slice JSON or split a saved record.
   const fits = (key, value) => Buffer.byteLength(JSON.stringify({ ...packed, [key]: value })) <= budget - 1000;

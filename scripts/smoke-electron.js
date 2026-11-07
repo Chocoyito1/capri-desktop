@@ -11,7 +11,7 @@ const scratch = path.resolve(__dirname, '../../../work');
 fs.mkdirSync(scratch, { recursive: true });
 process.env.CAPRIGPT_TEST_PROFILE = fs.mkdtempSync(path.join(scratch, 'caprigpt-smoke-'));
 process.env.CAPRIGPT_CONNECTION_FILE = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'integration.json');
-let cognitiveProbe, proactiveProbe, reflectionProbe, actionsProbe, cognitiveSchemaSeen = false, foregroundContext, foregroundWorkspace;
+let cognitiveProbe, proactiveProbe, reflectionProbe, actionsProbe, interestsProbe, cognitiveSchemaSeen = false, foregroundContext, foregroundWorkspace;
 if (process.argv.includes('--cognitive-only')) {
   require('../src/main/native-windows').context = () => ({ foreground: { app: 'Code', title: 'Synthetic project' } });
   require('../src/main/native-windows').foregroundBounds = () => null;
@@ -20,6 +20,7 @@ if (process.argv.includes('--cognitive-only')) {
     ['proactive-conversation', 'ProactiveConversation', value => proactiveProbe = value],
     ['cognitive-reflection', 'ReflectionEngine', value => reflectionProbe = value],
     ['action-agent', 'ActionAgent', value => actionsProbe = value],
+    ['companion-interests', 'CompanionInterests', value => interestsProbe = value],
   ]) {
     const module = require('../src/main/' + file), Original = module[key];
     module[key] = class extends Original { constructor(options) { super(options); capture(this); } };
@@ -31,6 +32,8 @@ if (process.argv.includes('--cognitive-only')) {
       assert.deepEqual(this.tools.specs(), []);
       assert.equal(options.recordHistory, false); assert.ok(options.outputSchema);
       cognitiveSchemaSeen = true;
+      if (options.outputSchema.properties.domain) return JSON.stringify({ domain: 'worldbuilding', focus: 'Map a weather-shaped city',
+        question: 'What if streets moved with the rain?', rationale: 'A small rule could make an interesting fictional place.', continuationId: null });
       if (options.outputSchema.properties.hypothesis) return JSON.stringify({
         question: 'Would a second pair of eyes be useful?', hypothesis: 'Possibly ordinary project work.',
         counterpoint: 'App visits do not establish intent.', confidence: 0.3, priority: 0.4, next_step: 'ask_later' });
@@ -43,6 +46,11 @@ if (process.argv.includes('--cognitive-only')) {
   };
 }
 const requestEffects=[];
+if (process.argv.includes('--fullscreen-only')) {
+  const { CodexBrain } = require('../src/main/codex-brain');
+  CodexBrain.prototype.status = async () => ({ ok: true, backend: 'codex', model: 'codex' });
+  CodexBrain.prototype.chat = async function(text, delta) { delta?.('Left click restored.'); return 'Left click restored.'; };
+}
 if(process.argv.includes('--requests-only')) {
   require('../src/main/ollama-runtime').executable=()=>null;
   require('../src/main/ollama').models=async()=>['qwen3.5:9b'];
@@ -140,9 +148,11 @@ app.whenReady().then(async () => {
       await js("document.querySelector('#panel').click()"); await pause(500);
       proactiveProbe.canRun = () => true; proactiveProbe.state.nextAt = 0;
       assert.equal(await proactiveProbe.run(), true);
+      assert.equal(interestsProbe.list()[0].focus, 'Map a weather-shaped city');
       for (let i = 0; i < 100 && !await js("document.querySelector('.panel__line').textContent.includes('What kind of game')"); i++) await pause(50);
       assert.match(await js("document.querySelector('.panel__line').textContent"), /What kind of game/);
-      assert.equal(win.isFocusable(), false);
+      assert.equal(win.isFocusable(), true, 'Mouse activation remains available');
+      assert.equal(win.isFocused(), false, 'A proactive remark must not take keyboard focus');
       await js("document.querySelector('[data-id=reply]').click()");
       for (let i = 0; i < 100 && !await js("document.querySelector('#panel').classList.contains('is-chat')"); i++) await pause(50);
       assert.equal(await js("document.querySelector('#panel').classList.contains('is-chat')"), true);
@@ -157,6 +167,7 @@ app.whenReady().then(async () => {
       for (let i = 0; i < 100 && !foregroundContext; i++) await pause(50);
       assert.equal(foregroundContext.savedGoals[0].text, 'Finish Capri roadmap');
       assert.equal(foregroundContext.savedGoals[0].next_step, 'Review test results');
+      assert.equal(foregroundContext.companionInterests[0].focus, 'Map a weather-shaped city');
       require('../src/main/config').save({ privacy: { memoryEnabled: true, memoryRecall: false } });
       await pause(100); foregroundContext = null;
       await js("document.querySelector('.panel__input').value='Goal context probe';document.querySelector('.panel__chat').requestSubmit()");
@@ -204,10 +215,17 @@ app.whenReady().then(async () => {
       assert.deepEqual(foregroundContext.recentTasks.recentTasks, []);
       const off = await controls.webContents.executeJavaScript('settingsHost.action("project-off")');
       assert.equal(off.state.project, null);
+      await controls.webContents.executeJavaScript('settingsHost.action("interests-open")');
+      for (let i=0;i<100 && !await js("document.querySelector('.panel__line').textContent.includes('Map a weather-shaped city')");i++) await pause(50);
+      assert.match(await js("document.querySelector('.panel__line').textContent"), /Map a weather-shaped city/);
+      await route('/interests dismiss 1');
+      assert.deepEqual(interestsProbe.context(), []);
+      await controls.webContents.executeJavaScript('settingsHost.patch({interestsEnabled:false})');
+      assert.equal(interestsProbe.enabled(), false);
       await route('/companion off');
       assert.equal(JSON.parse((await route('/companion status')).text).enabled, false);
       assert.equal(await proactiveProbe.run(), false);
-      console.log('PASS: Codex schema/no tools, reflection lock gate, proactive reply context, durable goals/recall, project picker and selection race, scoped notes/goals/workspace, stale task clearing and control-room project controls. Isolated profile, inference mocked.');
+      console.log('PASS: tool-free interest generation, persistent foreground interest context, review/dismiss/disable controls, reflection lock gate, proactive replies, goals/recall, project picker races and scoped context. Isolated profile, inference mocked.');
       clearTimeout(limit); app.exit(0); return;
     }
     if (process.argv.includes('--tts-only')) {
@@ -376,6 +394,10 @@ app.whenReady().then(async () => {
       await until(async()=>await shown()&&win.isVisible(),'teleport back');
       assert.equal(win.isFocusable(),true,'Returning from fullscreen must restore normal mouse activation without stealing focus');
       await until(()=>!ignoresMouse,'stationary-pointer hit target restored');
+      // Simulate lost native activation/forwarding while renderer hit state is
+      // cached true. Recovery must work with no new injected mousemove.
+      win.setFocusable(false); win.setIgnoreMouseEvents(true,{forward:true});
+      await until(()=>!ignoresMouse&&win.isFocusable(),'lost native input state recovers without forwarded mousemove');
       await js(`host.fullscreenRendered({revision:${oldRevision},hidden:true})`);await pause(300);
       assert.equal(win.isVisible(),true,'Late departure acknowledgment cannot re-hide the returned pet');
       for(let i=0;i<24;i++){fullscreenProbe=i%2?null:fullscreen;await pause(25);}
@@ -390,8 +412,9 @@ app.whenReady().then(async () => {
       };
       await clickAt(await point());
       assert.equal(await js('window.petClicks'),1,'Left click must reach the returned character');
-      // Clear the status panel, then exercise real pointer capture and dragging.
-      await js("document.querySelector('#panel').click()");await pause(200);
+      // Keep the launcher open: hiding it as pickup starts must not blur and
+      // immediately cancel pointer capture.
+      assert.equal(await js("!document.querySelector('#talk-menu').hidden"),true);
       const dragAt=await point(),beforeDrag=await js('({...window.fullscreenPet.pos})');
       win.webContents.sendInputEvent({type:'mouseMove',...dragAt});await pause(30);
       win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...dragAt});

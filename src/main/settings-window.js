@@ -14,10 +14,10 @@ function createSettingsWindow({ state, patch, action }) {
   ipcMain.handle('settings:action', async (event, name, value) => {
     if (!trusted(event)) throw Error('Settings window required.');
     if (name === 'close') { window.hide(); return; }
-    if (!['gaming', 'visibility', 'startup', 'sounds-folder', 'memory-export', 'memory-delete', 'memory-open', 'project-choose', 'project-off', 'refresh', 'restart', 'quit'].includes(name)) throw Error('Unknown action.');
+    if (!['gaming', 'visibility', 'startup', 'sounds-folder', 'memory-export', 'memory-delete', 'memory-open', 'interests-open', 'project-choose', 'project-off', 'refresh', 'restart', 'quit'].includes(name)) throw Error('Unknown action.');
     if (['gaming', 'startup'].includes(name) && typeof value !== 'boolean') throw Error('Invalid switch.');
     const result = await action(name, value);
-    if (name === 'memory-open') window.hide();
+    if (['memory-open', 'interests-open'].includes(name)) window.hide();
     return { state: state(), message: typeof result === 'string' ? result : '' };
   });
   return {

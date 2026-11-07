@@ -25,6 +25,7 @@ const { ScreenAccess } = require('./screen-access');
 const { CognitiveFoundation } = require('./cognitive-foundation');
 const { ReflectionEngine } = require('./cognitive-reflection');
 const { ProactiveConversation } = require('./proactive-conversation');
+const { CompanionInterests } = require('./companion-interests');
 const { CompanionGoals } = require('./companion-goals');
 const { personalityContext } = require('./personality');
 const { CodexEvents } = require('./codex-events');
@@ -45,7 +46,7 @@ const { RequestInterpreter } = require('./request-interpreter');
 const { createAgentBrowser } = require('./agent-browser');
 const { WorldState } = require('./world-state');
 const capabilities = require('./capabilities');
-let memoryStore, goalStore, autonomy, reflection, curiosity;
+let memoryStore, goalStore, autonomy, reflection, curiosity, interests;
 let sessionAvailable = true;
 let projectRouting = false;
 // A spoken wake address temporarily permits requested foreground work, not background actions.
@@ -159,6 +160,7 @@ const currentContext = () => {
   const savedGoals = p.memoryEnabled ? goals().context() : [];
   return { presentation, capabilities: capabilities.registry(agentConfig()), externalCodexEvents: codexEvents.snapshot(),
   savedGoals, currentProject: goals().projects.context(Math.max(0, p.promptBudget - Buffer.byteLength(JSON.stringify(savedGoals)))),
+  companionInterests: interests?.context() || [],
   recentTasks: actions.grounding({ includeApps: false }),
   recentConversation: brain?.history?.slice(-6) || [] };
 };
@@ -208,6 +210,7 @@ const inferCognitive = async (request, signal) => {
 };
 curiosity = new CognitiveFoundation({ file: path.join(app.getPath('userData'), 'curiosity.sqlite'),
   settings: () => config.load(), context: pcContext });
+interests = new CompanionInterests({ db: curiosity.db, settings: () => config.load() });
 const cognitiveIdle = () => !foreground.active && !chats.size && !brain.busy && !agent.busy &&
   !actions.busy && !memoryRequests.busy && !requests.busy && !settingsRequests.busy;
 reflection = new ReflectionEngine({ journal: curiosity, settings: () => config.load(),
@@ -215,6 +218,7 @@ reflection = new ReflectionEngine({ journal: curiosity, settings: () => config.l
   canRun: () => cognitiveIdle() && !autonomy?.busy && sessionAvailable && !voiceSession &&
     (!speech.current || speech.current.mode === 'wake') && !fullscreenState.active });
 autonomy = new ProactiveConversation({ settings: rendererConfig, journal: curiosity,
+  interests,
   model: 'codex', models: decisionModels, infer: inferCognitive,
   observe: () => pcContext.snapshot('companion-conversation', ['contextForeground']),
   memories: () => memory().list(10),
@@ -318,7 +322,9 @@ function createOverlay() {
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    focusable: false,
+    // showInactive() preserves foreground focus. Keep the window capable of
+    // receiving native mouse input; only explicit chat/menu requests focus it.
+    focusable: true,
     hasShadow: false,
     alwaysOnTop: true,
     type: process.platform === 'win32' ? 'toolbar' : undefined,
@@ -505,7 +511,7 @@ function updateConfig(patch) {
   const changes = key => Object.hasOwn(patch, key);
   const policyChanged = ['gamingMode', 'agentEnabled', 'desktopActions', 'privacy', 'systemAccess', 'screenAwareness', 'autonomyEnabled', 'autonomyScreen'].some(changes);
   const backendChanged = ['codexModel', 'codexExecutable', 'codexEffort'].some(changes);
-  if (['proactiveEnabled', 'cognitiveEnabled', 'visible', 'lang'].some(changes)) {
+  if (['proactiveEnabled', 'cognitiveEnabled', 'interestsEnabled', 'visible', 'lang'].some(changes)) {
     if (typeof autonomy !== 'undefined') autonomy?.touch();
     if (typeof reflection !== 'undefined') reflection?.cancel();
   }
@@ -577,6 +583,7 @@ async function settingsAction(name, value) {
     case 'memory-export': return (await personal.route('/memory export')).text;
     case 'memory-delete': { autonomy.touch(); const result = await personal.route('/memory delete-all'); brain.reset(); return result.text; }
     case 'memory-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing memory.'); sendCommand('memory'); break;
+    case 'interests-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing interests.'); sendCommand('interests'); break;
     case 'project-choose': return (await foreground.run(() => projectCommand('/project choose'))).text;
     case 'project-off': return (await foreground.run(() => projectCommand('/project off'))).text;
     case 'refresh': return runtime().currentSource ? 'Current local source is loaded.' : 'Local changes found. Restart Capri to load them.';
@@ -646,8 +653,12 @@ function registerIpc() {
     try {
       if (event.sender !== overlay?.webContents) throw Error('Overlay required.');
       if (typeof text !== 'string' || text.length > 12000) throw Error('Invalid message.');
+      const interestReply = autonomy.respond(text);
       autonomy.touch();
       if (projectRouting) return { handled: true, text: 'Finish choosing your project before sending a request.' };
+      if (interestReply) { brain.reset(); return interestReply; }
+      const interestCommand = interests.route(text, updateConfig);
+      if (interestCommand) { brain.reset(); return interestCommand; }
       if (/^\/project(?:\s|$)/i.test(text.trim())) {
         return await projectCommand(text);
       }
@@ -697,8 +708,11 @@ function registerIpc() {
     catch(error) { return {ok:false,error:error.message}; }
   });
   ipcMain.handle('integration:status', () => codexEvents.snapshot());
-  ipcMain.on('overlay:interactive', (_e, on) => {
-    overlay?.setIgnoreMouseEvents(((fullscreenState.active || config.load().gamingMode) && !voiceSession) || !on, { forward: true });
+  ipcMain.on('overlay:interactive', (event, on) => {
+    if (!speechCaller(event) || typeof on !== 'boolean' || !overlay || overlay.isDestroyed()) return;
+    const ignore = ((fullscreenState.active || config.load().gamingMode) && !voiceSession) || !on;
+    if (!ignore && !overlay.isFocusable()) overlay.setFocusable(true);
+    overlay.setIgnoreMouseEvents(ignore, { forward: true });
   });
   ipcMain.handle('overlay:cursor', () => {
     const p = screen.getCursorScreenPoint();
@@ -758,9 +772,8 @@ function registerIpc() {
     autonomy.touch();
     if (!overlay) return;
     if ((fullscreenState.active || config.load().gamingMode) && !voiceSession) return;
-    overlay.setFocusable(Boolean(on));
-    if (on) overlay.focus();
-    else overlay.blur();
+    if (on === true) { overlay.setFocusable(true); overlay.focus(); }
+    else if (on === false) overlay.blur();
   });
   // her report card's copy button: a picture of that part of the overlay, on the clipboard
   ipcMain.handle('panel:copy', async (_e, rect) => {

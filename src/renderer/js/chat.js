@@ -93,7 +93,7 @@ export class Chat {
       face: 'look',
       badge: commandsOnly ? 'LOCAL' : '',
       tag: '',
-      line: commandsOnly ? 'Local commands: /memory, /context, /privacy status.' : greeting || this.pickWelcome(this.brain.lang),
+      line: commandsOnly ? 'Local commands: /memory, /goals, /project help, /interests, /context, /privacy status.' : greeting || this.pickWelcome(this.brain.lang),
       chat: {
         mode,
         voicePlaceholder: this.brain.lang === 'es' ? 'Decime algo...' : 'Say something...',

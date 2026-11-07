@@ -11,6 +11,7 @@ import { Chat } from './chat.js';
 import { TalkMenu } from './talk-menu.js';
 import { IntegrationCompanion } from './integration.js';
 import { FullscreenPresence } from './fullscreen-presence.js';
+import { PointerRecovery } from './pointer-recovery.js';
 import { Dictation } from './dictation.js';
 import { WakeListener } from './wake-listener.js';
 import { LINES } from './lines.js';
@@ -129,7 +130,14 @@ async function boot() {
       }, 400);
     }
   };
+  const pointerRecovery = new PointerRecovery({ host,
+    eligible: () => !document.hidden && !capri.gaming && (!capri.fullscreen || Boolean(wakeListener?.session)),
+    held: () => capri.pointerHeld || capri.dragging, revision: () => pointerRevision,
+    update: point => { mouse = point; refreshHit(true); hoverChip(); },
+  });
+  window.addEventListener('beforeunload', () => pointerRecovery.close());
   window.addEventListener('mousemove', (e) => {
+    pointerRecovery.observed();
     pointerRevision++;
     mouse = { x: e.clientX, y: e.clientY };
     refreshHit();
@@ -150,7 +158,10 @@ async function boot() {
   });
 
   // wiring
-  capri.onPointerHold = () => refreshHit();
+  capri.onPointerHold = () => {
+    refreshHit();
+    if (!capri.pointerHeld && !capri.dragging && !talkMenu?.visible && !(panel.visible && panel.current?.chat)) host.focusOverlay(false);
+  };
   capri.onMove = (head) => {
     // pointing at something: the panel goes on her other side, so it doesn't cover it
     panel.setAnchor({ ...head, lean: capri.pointing ? -capri.pointing.dir : 0 }, capri.view);
@@ -333,17 +344,12 @@ async function boot() {
     voice.spoken?.speak(text);
   });
   new FullscreenPresence({ capri, host, onChange: () => {
-    const revision = ++pointerRevision;
+    ++pointerRevision;
     // Main can override click-through during a transition; resend even when
     // the renderer cache thinks nothing changed, including rapid reversals.
     refreshHit(true);
     if (capri.fullscreen) { talkMenu.hide(); if (!dictation.fromWake) dictation.cancel(); }
-    else if (!capri.gaming) host.cursor().then(cursor => {
-      if (revision !== pointerRevision || capri.fullscreen || capri.gaming) return;
-      mouse = cursor?.inside ? { x: cursor.x, y: cursor.y } : null;
-      refreshHit(true);
-      hoverChip();
-    }).catch(() => {});
+    else if (!capri.gaming) pointerRecovery.sample(true);
   } });
   host.onWindows((data) => {
     capri.setWindows(data);
@@ -411,6 +417,11 @@ async function boot() {
         break;
       case 'memory':
         chat.start(true);
+        break;
+      case 'interests':
+        talkMenu.hide({ keepFocus: true });
+        await chat.start(true);
+        await chat.send('/interests list');
         break;
       case 'report': // "Mission report" in her menu
         if (capri.stowed) {

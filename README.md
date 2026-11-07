@@ -10,6 +10,11 @@ Choose a workspace in **Control room → Connections → Project companion**.
 reported outcomes separate, and can save recognized command-exit receipts when
 Memory is enabled. Selecting a folder does not start work or approve actions.
 
+[Chosen interests](docs/COMPANION-INTERESTS.md) let Capri develop a persistent
+creative focus and return to it across conversations. Review or disable these in
+**PC awareness**. The same update restores input after fullscreen and preserves
+pointer capture when dragging her with the talk launcher open.
+
 See [AGENT-PRESENCE.md](docs/AGENT-PRESENCE.md) for implemented behavior, screen/cloud
 data flow, controls, limits and validation. This is an unreleased implementation;
 live screen/control acceptance is still pending. Restart Capri to load changes.

@@ -33,7 +33,14 @@ export class TalkMenu {
     this.el.tabIndex = -1;
     this.el.focus({ preventScroll: true }); this.onChange();
   }
-  hide({ keepFocus = false } = {}) { if (!this.visible) return; this.el.hidden = true; if (!keepFocus) this.host.focusOverlay(false); this.onChange(); }
+  hide({ keepFocus = false } = {}) {
+    if (!this.visible) return;
+    this.el.hidden = true;
+    // Hiding the launcher as a drag starts must not blur the window: blur
+    // releases pointer capture and used to cancel the pickup immediately.
+    if (!keepFocus && !this.capri.pointerHeld && !this.capri.dragging) this.host.focusOverlay(false);
+    this.onChange();
+  }
   place(head = this.capri.head(), view = this.capri.view) {
     if (!this.visible) return;
     if (this.capri.gaming || this.capri.fullscreen || this.capri.stowed || this.capri.dragging) return this.hide();
