@@ -71,3 +71,62 @@ On this laptop, Ollama was installed but stopped. Started the local server, veri
 At the user's request, visible or stowed Capri launches now prepare the installed local Ollama server in the background. Gaming mode skips startup. The existing server is reused, missing installations retain the setup flow, and no model is preloaded. Chat status waits for startup readiness so an early click does not incorrectly report an offline server. The manual Start Ollama button remains available for retries. This supersedes the manual-only startup behavior described above.
 
 The isolated Electron startup/integration check passes with the running server reused, and `/api/ps` still reports no loaded models afterward. Cold server startup was verified through the shared runtime helper in the preceding change.
+
+## Chat closing and repeat body clicks (2026-11-09)
+
+Body clicks now show the conversation launcher idempotently: a rapid second
+click does not toggle it closed and release overlay focus. The fullscreen
+watcher preserves the last external-app state while Capri owns foreground
+focus, and requires 150 ms of sustained fullscreen evidence before hiding her.
+Brief activation rectangles during chat close cannot trigger a collapse and
+return in place. Returning from genuine fullscreen remains immediate.
+
+On Windows, `npm test` passed all 326 tests. New watcher regressions cover a
+brief chat-close activation rectangle and repeated overlay focus round trips;
+the launcher test verifies repeated show requests neither dismiss nor refocus.
+`electron scripts/smoke-electron.js --fullscreen-only` passed in a separate
+profile with native Chromium input: repeat body clicks keep the launcher and
+character visible; the X closes chat without movement, loss of opacity, or a
+teleport; a simulated 75 ms fullscreen signal after closing produces no state
+revision or animation. Sustained fullscreen detection was observed at 217 ms.
+Existing drag, fullscreen reversal, gaming and manual-stow checks also passed.
+Fullscreen geometry and chat inference were simulated; the user's exact live
+desktop occurrence was not independently reproduced. No active Capri instance
+was restarted. Restart normally to load these changes.
+
+## Sound-reactive speech aura (2026-11-09)
+
+Added a violet/mint silhouette aura driven by spoken playback amplitude, with
+smooth attack/release and a gentle pulse. The analyser accounts for master
+volume, mute and suspended audio. Reduced motion keeps the envelope without
+the periodic pulse; hiding Capri clears the effect immediately.
+
+On Windows, all 343 tests pass. `electron scripts/check-speech-aura.js` passed
+using real Web Audio scheduling and analysis in isolated offscreen Electron:
+idle, audible playback, CSS rendering, natural completion, zero volume and
+interruption. Output was silenced downstream of analysis. The speaking capture
+under `.caprigpt-local/speech-aura-check/` was visually inspected. This verifies
+the playback path using a synthetic tone; a live spoken conversation remains
+for user validation. Windows x64 directory packaging with publishing disabled
+also passed. No running Capri instance was restarted.
+
+## Repository checkpoint and text-chat blips (2026-11-09)
+
+Text chat now retains synthesized text blips when spoken replies are enabled.
+The TTS preference previously suppressed both the panel typewriter and streamed
+reply cues, even though typed chat deliberately does not synthesize speech.
+Voice-mode deltas remain blip-free and the existing global mute still applies.
+
+Windows 10.0.26200 x64 / Node 24.15.0 / Electron 44.9.3: all 343 unit tests,
+Windows x64 directory packaging (`--publish never`), original-art animation
+checks, preview-cel checks, the isolated cognitive integration check and the
+new `--chat-sounds-only` Electron check passed. The cognitive fixture now uses
+a distinct synthetic app name so startup foreground observations cannot consume
+the fixture's cooldown before its three observations.
+
+The broader `--voice-flow-only` check passed its text-chat sound assertions but
+timed out waiting for the wake listener; continuous wake-to-voice flow is not
+revalidated by this checkpoint. Live model/voice quality and installer testing
+remain outside these checks. Local configuration, models, reference audio,
+credentials and captures stay excluded. This is a development checkpoint of the
+unreleased 0.4.0 prototype, without a release tag or publication.

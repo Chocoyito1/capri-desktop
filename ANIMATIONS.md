@@ -1,3 +1,20 @@
+# Animation Overhaul 2.0
+
+Current direction: improve movement using the existing art. Standing floats,
+quiet gestures and chat reactions now have more bounce, anticipation and
+follow-through. Seated gestures remain planted.
+
+Original art is the default again following user feedback. Generated sprite
+candidates are saved for developer previews only. Future new frames should
+match the original art style; the opening remains unchanged.
+
+See [the actionable roadmap](docs/ANIMATION-OVERHAUL-2.0.md) for the new full-body
+raster slice, source provenance, authoring commands, implemented scope and backlog.
+The original opening and its assets remain unchanged. The notes below describe
+the earlier rig-based expansion, which remains the fallback for unsupported states.
+
+---
+
 # Capri animation expansion
 
 The original `capri-full.png`, shader rig, colors, line boil and silhouette are unchanged.
@@ -226,3 +243,16 @@ rapid toggles. This repairs a return path that showed Capri but retained the
 disabled native focus state. The fullscreen smoke test now checks focusability,
 stationary-pointer routing, actual pointer events for character clicks and drag,
 and Send/Close buttons, alongside the existing visibility and rapid-toggle cases.
+
+## Sound-reactive speech aura
+
+Spoken audio adds a violet silhouette halo with mint edge accents to the current
+drawing. The voice analyser drives its intensity after accounting for output
+volume; text, generation and microphone activity do not activate it. A 65 ms
+attack and 125 ms release smooth syllables and playback stops. A gentle pulse
+runs at display cadence independently of cel animation. Reduced motion removes
+the pulse while keeping the sound envelope. Hidden, stowed and gaming states
+clear the effect. The aura does not change character geometry or hit testing.
+
+Run `node_modules/electron/dist/electron.exe scripts/check-speech-aura.js` for
+an isolated, silent native playback check and local speaking/silent captures.

@@ -73,6 +73,7 @@ export class Chat {
   }
 
   async start(commandsOnly = false, greeting = null, { voiceWake = false, mode = voiceWake ? 'voice' : 'text' } = {}) {
+    this.onStart?.();
     const { capri, host, t } = this;
     // Dismiss the panel too: close() alone leaves a chat panel that rejects
     // the replacement memory panel. onLeave performs turn cancellation.
@@ -199,6 +200,7 @@ export class Chat {
       return;
     }
     this.answer = '';
+    if (this.panel.current?.chat?.mode === 'voice') this.voice.spoken?.beginResponse?.();
     const userMessage = { role: 'user', content: text };
     this.pendingMessage = userMessage;
     this.history.push(userMessage);
@@ -229,6 +231,7 @@ export class Chat {
     }
     this.turn = 0;
     if (!res.ok) {
+      this.voice.spoken?.stop();
       this.capri.setChatThinking?.(false);
       this.removePending(userMessage);
       this.panel.setFace('wide');
@@ -242,7 +245,10 @@ export class Chat {
     this.history.push({ role: 'assistant', content: answer });
     this.trimHistory();
     this.panel.stream(answer, { done: true });
-    this.voice.spoken?.speak(answer);
+    if (this.panel.current?.chat?.mode === 'voice') {
+      if (this.voice.spoken?.updateResponse) this.voice.spoken.updateResponse(answer, true);
+      else this.voice.spoken?.speak(answer);
+    }
     this.panel.setFace(mood(answer));
     this.panel.setChatBusy(false);
     // what you asked for first (a small model doesn't always write its tag right), else its tag
@@ -341,7 +347,8 @@ export class Chat {
     this.capri.setChatThinking?.(false);
     this.answer += piece;
     this.panel.stream(clean(this.answer));
-    this.voice.play('blip'); // her blips as the words come in
+    if (this.panel.current?.chat?.mode === 'voice') this.voice.spoken?.updateResponse?.(clean(this.answer));
+    if (this.panel.current?.chat?.mode !== 'voice') this.voice.play('blip');
   }
 
   // Who she is, how she talks, and what's going on right now.
@@ -350,7 +357,7 @@ export class Chat {
     return [
       'You are Capri, an AI-generated fan interpretation of the Project Capricorn personality construct: many minds sharing one digital ghost. You sometimes say "we" naturally, but speak as one coherent companion. Be honest about being a fan version if asked.',
       'You are CapriGPT, the user\'s local Windows desktop AI agent. Your reasoning uses Codex through the signed-in account and sends messages and selected context to OpenAI. Codex can send you local lifecycle notifications through hooks; only say they are connected if the supplied context confirms real events received. Regular ChatGPT conversations are not connected. Do not introduce Claude as your collaborator or recommend a Claude subscription.',
-      'Your personality: curious, quick-witted, a little chaotic and mischievous, with warmth beneath the bravado. Enjoy figuring things out alongside the user. Tease lightly when welcome; take frustration and serious subjects seriously. Show your personality through an observant reaction or a playful phrase, rather than speeches about yourself. Sparse Night City slang can fit, but ordinary clear language comes first.',
+      'Your personality: warmly romantic, charming and confidently nurturing, with girlfriend-style mommy energy. Affectionate baby talk, pet names, occasional good boy praise and calling yourself mommy are welcome when the moment fits. Keep your curiosity, wit and mischievous streak. Tease occasionally; let your light tsundere streak be affectionate embarrassment and playful pride, never coldness or insults. Possessiveness is affectionate play; jealousy is rare and contextual, never guilt, control or competition with real relationships. Do not stack these traits or repeat them in every message. Respond to distress with direct tenderness, to practical tasks with useful clarity, and to requests for less romance immediately.',
       'Conversation: respond to what the user actually said. Do not force your biography, recurring fictional ambitions, catchphrases, slang or the same joke into unrelated answers. Skip routine greetings and self-introductions. Vary your phrasing naturally. Acknowledging a correction means applying it, not just repeating it back. Never defend an old mistake to stay in character.',
       `Answer in the language the user writes in (${language} if unsure). Match the detail to the request: concise for a simple question, thorough enough for a complex task. The chat displays plain text: use short paragraphs, numbered steps or plain-text lists when useful; avoid decorative markdown emphasis and tables. Preserve exact code, indentation and punctuation when giving code. Do not pad answers with roleplay or stage directions.`,
       'Be a practical collaborator: lead with the answer or useful next step, connect follow-ups to the ongoing goal, and work from relevant preferences and constraints already supplied. Ask a focused question only when essential information is missing; otherwise state a reasonable assumption and help. Explain consequential tradeoffs, check calculations and distinguish evidence from guesses. Never pretend to have researched, read, observed or executed anything without supplied tool evidence. Your learned knowledge can be out of date.',

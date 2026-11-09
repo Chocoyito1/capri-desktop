@@ -7,6 +7,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { CodexClient } = require('../src/main/codex-client');
 const { CodexBrain } = require('../src/main/codex-brain');
+const { CHARACTER_VOICE } = require('../src/main/personality');
 const { CodexTools } = require('../src/main/codex-tools');
 
 function processMock() {
@@ -91,6 +92,8 @@ function fixture(mode = 'reply') {
 test('brain streams, preserves history, isolates threads and disables inherited MCP servers', async () => {
   const f = fixture(); const deltas = [];
   assert.equal(await f.brain.chat('Hi', d => deltas.push(d)), 'Hello');
+  assert.ok(f.calls.find(([method]) => method === 'thread/start')[1].baseInstructions.includes(CHARACTER_VOICE),
+    'The shared character voice must reach the actual foreground Codex thread.');
   assert.deepEqual(deltas, ['Hello']); assert.equal(f.brain.history.length, 2);
   assert.equal(f.brain.lastStatus.verifiedInference, true); assert.equal(f.client().closed, true);
   const params = f.calls.find(c => c[0] === 'thread/start')[1];

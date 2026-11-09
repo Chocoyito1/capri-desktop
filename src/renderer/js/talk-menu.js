@@ -19,6 +19,11 @@ export class TalkMenu {
   get visible() { return !this.el.hidden; }
   toggle() {
     if (this.visible) return this.hide();
+    this.show();
+  }
+  show() {
+    // Repeated body clicks are requests to talk, not a shortcut to dismiss.
+    if (this.visible) return;
     if (this.capri.gaming || this.capri.fullscreen || this.capri.stowed || this.capri.dragging) return;
     this.capri.wake();
     this.greeting.textContent = this.pick(this.language());

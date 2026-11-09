@@ -23,6 +23,7 @@ const { CodexBrain } = require('./codex-brain');
 const { CodexTools } = require('./codex-tools');
 const { ScreenAccess } = require('./screen-access');
 const { CognitiveFoundation } = require('./cognitive-foundation');
+const { GroundedCuriosity } = require('./grounded-curiosity');
 const { ReflectionEngine } = require('./cognitive-reflection');
 const { ProactiveConversation } = require('./proactive-conversation');
 const { CompanionInterests } = require('./companion-interests');
@@ -49,6 +50,7 @@ const capabilities = require('./capabilities');
 let memoryStore, goalStore, autonomy, reflection, curiosity, interests;
 let sessionAvailable = true;
 let projectRouting = false;
+let projectFeedbackAnchor = null;
 // A spoken wake address temporarily permits requested foreground work, not background actions.
 let voiceSession = false;
 const agentConfig = () => voiceSession ? { ...config.load(), gamingMode: false } : config.load();
@@ -157,9 +159,11 @@ const screenAccess = new ScreenAccess({ settings: agentConfig,
 });
 const currentContext = () => {
   const p = permissions(agentConfig().privacy);
-  const savedGoals = p.memoryEnabled ? goals().context() : [];
+  const savedContinuity = goals().continuity.context();
+  const remaining = Math.max(0, p.promptBudget - Buffer.byteLength(JSON.stringify(savedContinuity)));
+  const savedGoals = p.memoryEnabled && !savedContinuity.length ? goals().context() : [];
   return { presentation, capabilities: capabilities.registry(agentConfig()), externalCodexEvents: codexEvents.snapshot(),
-  savedGoals, currentProject: goals().projects.context(Math.max(0, p.promptBudget - Buffer.byteLength(JSON.stringify(savedGoals)))),
+  savedContinuity, savedGoals, currentProject: goals().projects.context(Math.max(0, remaining - Buffer.byteLength(JSON.stringify(savedGoals)))),
   companionInterests: interests?.context() || [],
   recentTasks: actions.grounding({ includeApps: false }),
   recentConversation: brain?.history?.slice(-6) || [] };
@@ -174,16 +178,23 @@ const brainTools = new CodexTools({ settings: agentConfig, context: pcContext, s
     bodyJobs.set(id, result => finish(null, result)); signal.addEventListener('abort', stop, { once: true });
     overlay.webContents.send('companion:body', { id, action });
   }),
-  actions, store: memory, state: settingsState, patch: updateConfig, confirm: confirmMemory });
+  actions, store: memory, goals, curiosity: () => curiosity, state: settingsState, patch: updateConfig, confirm: confirmMemory });
 const brain = new CodexBrain({ settings: agentConfig,
   cwd: path.join(app.getPath('temp'), 'caprigpt-codex-brain'), tools: brainTools,
   systemTools: () => config.load().systemAccess === true, workspace: () => goals().projects.workspace() || app.getPath('home'), context: currentContext,
-  onOutcome: receipt => goals().projects.recordVerification(receipt),
+  onOutcome: receipt => {
+    const saved = goals().projects.recordVerification(receipt);
+    if (saved) {
+      projectFeedbackAnchor = { scope: goals().projects.scope(), at: Date.now() };
+      groundedCuriosity.sync(); reflection.schedule();
+    }
+    return saved;
+  },
   approve: async (message, { text, signal, item }) => {
     signal.throwIfAborted();
     const p = message.params;
     return confirmMemory('Review Codex action', JSON.stringify({ currentRequest: text, action: message.method,
-      reason: p.reason, command: p.command, cwd: p.cwd, permissions: p.permissions, grantRoot: p.grantRoot, item: item || p.itemId }, null, 2).slice(0, 12000));
+      reason: p.reason, command: p.command, cwd: p.cwd, permissions: p.permissions, grantRoot: p.grantRoot, routine: brainTools.routineSession ? { name: brainTools.routineSession.row.name, version: brainTools.routineSession.row.version, step: brainTools.routineSession.index + 1, instruction: brainTools.routineSession.step() } : null, item: item || p.itemId }, null, 2).slice(0, 12000));
   },
 });
 
@@ -211,6 +222,7 @@ const inferCognitive = async (request, signal) => {
 curiosity = new CognitiveFoundation({ file: path.join(app.getPath('userData'), 'curiosity.sqlite'),
   settings: () => config.load(), context: pcContext });
 interests = new CompanionInterests({ db: curiosity.db, settings: () => config.load() });
+const groundedCuriosity = new GroundedCuriosity({ journal: curiosity, goals, settings: () => config.load() });
 const cognitiveIdle = () => !foreground.active && !chats.size && !brain.busy && !agent.busy &&
   !actions.busy && !memoryRequests.busy && !requests.busy && !settingsRequests.busy;
 reflection = new ReflectionEngine({ journal: curiosity, settings: () => config.load(),
@@ -258,8 +270,8 @@ const speech = new SpeechInput({
   wakeAllowed,
   notify: state => {
     if (!overlay || overlay.isDestroyed()) return;
-    if (state.type === 'wake') {
-      voiceSession = true; autonomy.cancel(); tts.cancel();
+    if (state.type === 'wake' || (state.type === 'ready' && state.mode === 'conversation')) {
+      voiceSession = true; autonomy.cancel(); tts.cancel(); tts.warm();
       clearTimeout(fullscreenHideTimer);
       overlay.webContents.setBackgroundThrottling(false); overlay.showInactive();
     }
@@ -269,7 +281,7 @@ const speech = new SpeechInput({
 
 const tts = new SpeechOutput({ root: ROOT, config: () => config.load(),
   allowed: () => speech.allowed() && (voiceSession || config.load().visible !== false)
-    && (!speech.current || speech.current.mode === 'wake'),
+    && (!speech.current || ['wake', 'conversation'].includes(speech.current.mode)),
   notify: state => { if (overlay && !overlay.isDestroyed()) overlay.webContents.send('tts:state', state); },
 });
 
@@ -349,7 +361,11 @@ function createOverlay() {
   overlay.webContents.session.setPermissionCheckHandler((contents, permission, origin, details) => microphonePermission(contents,permission,details));
   overlay.loadURL('capri://app/src/renderer/index.html');
   // always shown: put away, she's still there as her biochip in the corner
-  overlay.once('ready-to-show', () => { if (!config.load().gamingMode && !fullscreenState.active) overlay.showInactive(); });
+  overlay.once('ready-to-show', () => {
+    if (!config.load().gamingMode && !fullscreenState.active) {
+      overlay.showInactive(); if (config.load().visible !== false) tts.warm();
+    }
+  });
   overlay.webContents.on('render-process-gone', (_e, details) => {
     speech.cancel(true); tts.cancel(); endVoiceSession();
     console.error('[capri] renderer gone:', details.reason);
@@ -509,9 +525,9 @@ function rendererConfig() {
 
 function updateConfig(patch) {
   const changes = key => Object.hasOwn(patch, key);
-  const policyChanged = ['gamingMode', 'agentEnabled', 'desktopActions', 'privacy', 'systemAccess', 'screenAwareness', 'autonomyEnabled', 'autonomyScreen'].some(changes);
+  const policyChanged = ['routinesEnabled', 'gamingMode', 'agentEnabled', 'desktopActions', 'privacy', 'systemAccess', 'screenAwareness', 'autonomyEnabled', 'autonomyScreen'].some(changes);
   const backendChanged = ['codexModel', 'codexExecutable', 'codexEffort'].some(changes);
-  if (['proactiveEnabled', 'cognitiveEnabled', 'interestsEnabled', 'visible', 'lang'].some(changes)) {
+  if (['routinesEnabled', 'projectCuriosityEnabled', 'dailyReviewEnabled', 'dailyReviewNotify', 'proactiveEnabled', 'cognitiveEnabled', 'interestsEnabled', 'visible', 'lang'].some(changes)) {
     if (typeof autonomy !== 'undefined') autonomy?.touch();
     if (typeof reflection !== 'undefined') reflection?.cancel();
   }
@@ -525,7 +541,8 @@ function updateConfig(patch) {
   if (['gamingMode', 'privacy'].some(changes) || backendChanged) brain.reset();
   if ((patch.gamingMode === true || patch.visible === false) && speech.current?.mode !== 'wake') speech.cancel();
   if (patch.gamingMode === true || patch.visible === false
-      || ['muted', 'volume', 'ttsEnabled', 'ttsEngine', 'ttsPython', 'ttsReference', 'ttsReferenceText', 'ttsDevice'].some(changes)) tts.cancel();
+      || ['muted', 'volume', 'ttsEnabled', 'ttsEngine', 'ttsPython', 'ttsModel', 'ttsReference', 'ttsReferenceText', 'ttsDevice'].some(changes)) tts.cancel();
+  if (['ttsEnabled', 'ttsEngine', 'ttsPython', 'ttsModel', 'ttsReference', 'ttsReferenceText'].some(changes) || patch.muted === true) tts.close();
   if (patch.privacy) patch = { ...patch, privacy: permissions({ ...config.load().privacy, ...patch.privacy }) };
   config.save(patch);
   if (patch.wakeWordEnabled === false) { speech.cancel(); endVoiceSession(); }
@@ -566,6 +583,7 @@ async function projectCommand(text) {
     autonomy.touch();
     const previousScope = goals().projects.scope();
     const result = await goals().projects.route(text);
+    groundedCuriosity.sync();
     if (goals().projects.scope() !== previousScope) actions.context?.clear();
     brain.reset(); settingsRoom?.update();
     return result;
@@ -577,6 +595,12 @@ async function settingsAction(name, value) {
     case 'gaming': await setGamingMode(value); break;
     case 'visibility': toggleVisible(value); break;
     case 'startup': app.setLoginItemSettings({ ...loginItemOptions(), openAtLogin: value }); break;
+    case 'voice-preview': {
+      if (!config.load().ttsEnabled || config.load().muted) return 'Enable spoken replies and unmute Capri to preview her voice.';
+      if (!overlay || overlay.isDestroyed() || !overlay.isVisible()) return 'Bring Capri back to preview her voice.';
+      overlay.webContents.send('tts:state', { type: 'preview', text: "There you are, sweetheart. We can take this one step at a time. And yes, I noticed that little smile." });
+      return 'Preparing her voice. The first preview needs a little time to warm up.';
+    }
     case 'sounds-folder': fs.mkdirSync(userSoundsDir(), { recursive: true }); {
       const error = await shell.openPath(userSoundsDir()); if (error) throw Error(error); break;
     }
@@ -584,6 +608,9 @@ async function settingsAction(name, value) {
     case 'memory-delete': { autonomy.touch(); const result = await personal.route('/memory delete-all'); brain.reset(); return result.text; }
     case 'memory-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing memory.'); sendCommand('memory'); break;
     case 'interests-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing interests.'); sendCommand('interests'); break;
+    case 'reviews-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing your day.'); sendCommand('reviews'); break;
+    case 'curiosity-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing questions.'); sendCommand('curiosity'); break;
+    case 'routines-open': if (config.load().gamingMode) throw Error('Resume Capri before reviewing routines.'); sendCommand('routines'); break;
     case 'project-choose': return (await foreground.run(() => projectCommand('/project choose'))).text;
     case 'project-off': return (await foreground.run(() => projectCommand('/project off'))).text;
     case 'refresh': return runtime().currentSource ? 'Current local source is loaded.' : 'Local changes found. Restart Capri to load them.';
@@ -610,7 +637,9 @@ function createTray() {
 function registerIpc() {
   const speechCaller = event => event.sender === overlay?.webContents;
   ipcMain.on('companion:state', (event, state) => { if (speechCaller(event)) {
-      if (state?.chatOpen !== undefined && state.chatOpen !== presentation.chatOpen) autonomy.touch();
+      if (state?.chatOpen !== undefined && state.chatOpen !== presentation.chatOpen) {
+        autonomy.touch(); if (state.voiceActive === true) tts.warm();
+      }
       presentation = personalityContext(state);
     } });
   ipcMain.on('companion:event', (event, reason) => { if (speechCaller(event) && reason === 'chat-open') autonomy.touch(); });
@@ -634,6 +663,8 @@ function registerIpc() {
     return speech.stop(request?.id);
   });
   ipcMain.on('speech:audio', (event, request) => { if(speechCaller(event))speech.audio(request); });
+  ipcMain.handle('speech:conversation', (event, request) => speechCaller(event) ? speech.conversation(request?.id) : {ok:false,error:'speech-unavailable'});
+  ipcMain.on('speech:reset', (event, request) => { if(speechCaller(event))speech.resetUtterance(request?.id); });
   ipcMain.on('speech:cancel', (event, request) => {
     if (speechCaller(event) && request?.id === speech.current?.id) speech.cancel();
   });
@@ -653,9 +684,22 @@ function registerIpc() {
     try {
       if (event.sender !== overlay?.webContents) throw Error('Overlay required.');
       if (typeof text !== 'string' || text.length > 12000) throw Error('Invalid message.');
+      const inquiryAnchor = autonomy.state.lastInquiry;
       const interestReply = autonomy.respond(text);
       autonomy.touch();
       if (projectRouting) return { handled: true, text: 'Finish choosing your project before sending a request.' };
+      const routineCommand = await goals().routines.route(text, updateConfig);
+      if (routineCommand) { brain.reset(); return routineCommand; }
+      if (goals().routines.invocation(text)) return { handled: false };
+      const feedbackCommand = groundedCuriosity.route(text);
+      if (feedbackCommand) { if (groundedCuriosity.quietFeedback()) autonomy.defer(60); brain.reset(); return feedbackCommand; }
+      const anchored = Boolean(projectFeedbackAnchor && projectFeedbackAnchor.scope === goals().projects.scope()
+        && Date.now() - projectFeedbackAnchor.at >= 0 && Date.now() - projectFeedbackAnchor.at < 10 * 60000)
+        || Boolean(inquiryAnchor && Date.now() - inquiryAnchor.at >= 0 && Date.now() - inquiryAnchor.at < 10 * 60000
+          && curiosity.list(100).some(row => row.id === inquiryAnchor.id && row.subject === inquiryAnchor.subject
+            && row.evidence_revision === inquiryAnchor.revision && row.scope_id === goals().projects.scope()));
+      const feedback = groundedCuriosity.recordFeedback(text, { anchored });
+      if (['unhelpful', 'repetitive'].includes(feedback)) autonomy.defer(60);
       if (interestReply) { brain.reset(); return interestReply; }
       const interestCommand = interests.route(text, updateConfig);
       if (interestCommand) { brain.reset(); return interestCommand; }
@@ -663,7 +707,11 @@ function registerIpc() {
         return await projectCommand(text);
       }
       const goalCommand = /^\/goals(?:\s|$)/i.test(text.trim()) ? goals().route(text) : null;
-      if (goalCommand) { brain.reset(); return goalCommand; }
+      if (goalCommand) { groundedCuriosity.sync(); brain.reset(); return goalCommand; }
+      const continuityCommand = goals().continuity.route(text);
+      if (continuityCommand) { brain.reset(); return continuityCommand; }
+      const dailyReviewCommand = goals().reviews.route(text, updateConfig);
+      if (dailyReviewCommand) { brain.reset(); return dailyReviewCommand; }
       const companion = /^\/companion(?:\s+(on|off|status))?$/i.exec(text.trim());
       if (companion) {
         const command = (companion[1] || 'status').toLowerCase();
@@ -746,12 +794,14 @@ function registerIpc() {
     const stop = () => brain.cancel();
     abort.signal.addEventListener('abort', stop, { once: true });
     chats.set(id, { abort, done });
+    const feedbackAnchorAtStart = projectFeedbackAnchor;
     try {
       const text = await brain.chat(current.content,
         text => overlay?.webContents.send('chat:delta', { id, text }),
-        text => overlay?.webContents.send('task:progress', { id, text }));
+        text => overlay?.webContents.send('task:progress', { id, text }), { voice: request.mode === 'voice' && voiceSession });
+      if (projectFeedbackAnchor === feedbackAnchorAtStart) projectFeedbackAnchor = null;
       return { ok: true, text };
-    } catch (error) { return { ok: false, error: abort.signal.aborted ? 'stopped' : error.message }; }
+    } catch (error) { projectFeedbackAnchor = null; return { ok: false, error: abort.signal.aborted ? 'stopped' : error.message }; }
     finally { abort.signal.removeEventListener('abort', stop); chats.delete(id); finish(); }
   }));
   ipcMain.on('chat:stop', (event, id) => {
@@ -948,19 +998,38 @@ function main() {
     });
     globalShortcut.register('Control+Alt+C', () => toggleVisible());
     reflection.schedule();
-    const reflectionTimer = setInterval(() => reflection.schedule(), 60000);
+    const reflectionTimer = setInterval(() => {
+      try { groundedCuriosity.sync(); } catch { /* Saved evidence remains optional. */ }
+      reflection.schedule();
+    }, 60000);
     reflectionTimer.unref(); app.once('before-quit', () => clearInterval(reflectionTimer));
     for (const event of ['suspend', 'resume', 'lock-screen', 'unlock-screen']) powerMonitor.on(event, () => {
       sessionAvailable = event === 'resume' || event === 'unlock-screen'; autonomy.touch(); reflection.cancel();
     });
-    const presenceTimer = setInterval(() => autonomy.run().catch(() => {}), 15000);
+    const presenceTimer = setInterval(() => {
+      try {
+        groundedCuriosity.sync();
+        const offered = goals().reviews.tick({
+          available: autonomy.enabled() && !autonomy.busy && autonomy.canRun(),
+          notify: text => {
+            if (!sessionAvailable || !overlay || overlay.isDestroyed() || !autonomy.canRun()) return false;
+            brain.history = [...brain.history, { role: 'assistant', content: text }].slice(-24);
+            overlay.webContents.send('companion:conversation', text); return true;
+          },
+        });
+        if (offered) autonomy.touch();
+        else autonomy.run().catch(() => {});
+      } catch { /* Review storage cannot stop ordinary companion conversations. */
+        autonomy.run().catch(() => {});
+      }
+    }, 15000);
     presenceTimer.unref(); app.once('before-quit', () => clearInterval(presenceTimer));
     screen.on('display-metrics-changed', fitOverlay);
     screen.on('display-added', () => { fitOverlay(); rebuildTray(); });
     screen.on('display-removed', () => { fitOverlay(); rebuildTray(); });
   });
 
-  app.on('before-quit', () => { autonomy.close(); reflection.close(); cognitiveBrain.cancel(); brain.cancel(); decisionBrain.cancel(); speech.cancel(true); tts.cancel(); agent.cancel(); requests.cancel(); memoryRequests.cancel(); for (const { abort } of chats.values()) abort.abort(); });
+  app.on('before-quit', () => { autonomy.close(); reflection.close(); cognitiveBrain.cancel(); brain.cancel(); decisionBrain.cancel(); speech.cancel(true); tts.close(); agent.cancel(); requests.cancel(); memoryRequests.cancel(); for (const { abort } of chats.values()) abort.abort(); });
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
     windowWatch?.stop();

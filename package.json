@@ -12,6 +12,8 @@
     "demo": "node scripts/demo.js",
     "dist": "electron-builder --win",
     "test": "node --test tests/*.test.js",
+    "test:animations": "electron scripts/check-animations.js",
+    "test:cels": "electron scripts/check-cel-animations.js",
     "test:desktop": "electron scripts/smoke-electron.js",
     "test:memory": "electron scripts/smoke-electron.js --memory-only",
     "test:release": "electron scripts/smoke-electron.js --release-only",
@@ -55,8 +57,10 @@
   "dependencies": {
     "@fontsource/chakra-petch": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@ricky0123/vad-web": "0.0.31",
     "fast-xml-parser": "5.11.2",
-    "koffi": "3.3.4"
+    "koffi": "3.3.4",
+    "onnxruntime-web": "1.22.0"
   },
   "build": {
     "appId": "caprigpt.desktop",
@@ -70,6 +74,7 @@
       "LICENSE"
     ],
     "asarUnpack": [
+      "scripts/tts-qwen-worker.py",
       "hooks/**",
       "node_modules/koffi/**",
       "node_modules/@koromix/koffi-win32-*/**",

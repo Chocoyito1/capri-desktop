@@ -4,7 +4,16 @@ Follow-up: the core project companion is now implemented. See
 [PROJECT-COMPANION.md](PROJECT-COMPANION.md) for selected workspaces, scoped goals,
 user-authored decisions, reported outcomes and observed command-exit receipts.
 The original audit below records the starting implementation, not the follow-up
-feature's final status. Dependable project recall and daily review remain next.
+feature's final status. [Restart continuity](COMPANION-CONTINUITY.md) now adds
+project recall and natural goal/decision updates; [daily reviews](DAILY-REVIEW.md)
+now summarize saved evidence, open goals and next steps. The follow-up full suite
+passed 324/324 tests and the isolated cognitive Electron smoke passed with mocked
+Codex inference. [Grounded curiosity](GROUNDED-CURIOSITY.md) now connects inquiries
+to saved command exits, planning changes and explicit feedback.
+[Reusable routines](REUSABLE-ROUTINES.md) now add explicit teaching, persistent
+named definitions and foreground execution through existing tools with ordered
+receipt tracking. Broader voice/animation polish and everyday native acceptance
+remain follow-up work.
 
 Audited the current Windows checkout, including its substantial pre-existing
 uncommitted changes, against the nine features in “Capri Roadmap Functions”.

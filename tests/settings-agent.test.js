@@ -48,8 +48,8 @@ test('game pause resets on a fresh config load while other preferences survive',
   const boot=()=>{
     const module={exports:{}};
     const fakeFs={readFileSync:()=>JSON.stringify(saved),writeFileSync:(_file,text)=>{saved=JSON.parse(text);},mkdirSync(){}};
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/main/config.js'),'utf8'),{module,console,
-      require:name=>name==='electron'?{app:{getPath:()=>'/profile'}}:name==='node:fs'?fakeFs:name==='node:path'?path:require('../src/main/settings-migration')});
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/main/config.js'),'utf8'),{module,console,__dirname:path.resolve(__dirname,'../src/main'),
+      require:name=>name==='electron'?{app:{getPath:()=>'/profile'}}:name==='node:fs'?fakeFs:name==='node:path'?path:name==='./voice-setup'?{voiceSetup:(_root,value)=>value}:require('../src/main/settings-migration')});
     return module.exports;
   };
   const first=boot();

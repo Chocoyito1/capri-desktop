@@ -5,10 +5,10 @@ const fs = require('node:fs'), path = require('node:path');
 const source = file => fs.readFileSync(path.join(__dirname, '../src/renderer/js', file), 'utf8');
 const uri = code => 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
 
-test('local welcome bags cover at least ten unique greetings without repeats across refill', async () => {
+test('local welcome bags cover at least twenty unique greetings without repeats across refill', async () => {
   const { welcomePicker, WELCOMES } = await import(uri(source('welcome.js')));
   for (const language of ['en', 'es']) {
-    assert.ok(WELCOMES[language].length >= 10);
+    assert.ok(WELCOMES[language].length >= 20);
     const pick = welcomePicker(() => 0);
     const first = WELCOMES[language].map(() => pick(language));
     assert.equal(new Set(first).size, first.length);
@@ -31,9 +31,15 @@ test('launcher opens synchronously, clamps to screen, hits only circles and forw
   const capri = { wake() {}, head: () => ({ x: 795, top: 15, y: 30 }), view: { w: 800, h: 600 }, hit: () => false };
   const menu = new TalkMenu({ el, capri, host: { focusOverlay: value => focus.push(value) }, language: () => 'en',
     onChoose: (...args) => chosen.push(args) });
-  menu.toggle();
+  menu.show();
   assert.equal(menu.visible, true); assert.ok(greeting.textContent);
   assert.equal(menuFocused, 1); assert.equal(el.tabIndex, -1);
+  const firstGreeting=greeting.textContent;
+  menu.show();menu.show();
+  assert.equal(menu.visible,true,'Rapid repeat body clicks leave the launcher open');
+  assert.equal(greeting.textContent,firstGreeting);
+  assert.equal(menuFocused,1,'Repeat clicks must not refocus or release the overlay');
+  assert.deepEqual(focus,[true]);
   assert.equal(el.style.left, '554px'); assert.equal(el.style.top, '10px');
   assert.equal(menu.contains(28, 48), true); assert.equal(menu.contains(1, 21), false);
   assert.equal(menu.contains(64, 48), false, 'Gap between circles stays click-through');

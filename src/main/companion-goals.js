@@ -6,6 +6,9 @@ const path = require('node:path');
 const { fact } = require('./memory');
 const { permissions } = require('./pc-context');
 const { ProjectCompanion } = require('./project-companion');
+const { CompanionContinuity } = require('./companion-continuity');
+const { DailyReview } = require('./daily-review');
+const { ReusableRoutines } = require('./reusable-routines');
 
 // User-authored intentions, separate from speculative curiosity and task receipts.
 // A saved goal is context, never permission to execute or proof of progress.
@@ -23,6 +26,12 @@ class CompanionGoals {
     if (!this.db.prepare('PRAGMA table_info(companion_goals)').all().some(row => row.name === 'project_id'))
       this.db.exec('ALTER TABLE companion_goals ADD COLUMN project_id INTEGER');
     this.projects = new ProjectCompanion({ db: this.db, settings, now, choose, confirm });
+    this.db.exec(`CREATE TABLE IF NOT EXISTS companion_project_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+      code TEXT NOT NULL CHECK(code IN ('still-blocked','unhelpful','repetitive','helpful')), created_at INTEGER NOT NULL);`);
+    this.continuity = new CompanionContinuity({ goals: this, settings, confirm });
+    this.reviews = new DailyReview({ goals: this, settings, now });
+    this.routines = new ReusableRoutines({ goals: this, settings, confirm, now });
     this.prune();
   }
 
@@ -31,6 +40,12 @@ class CompanionGoals {
     if (days > 0) this.db.prepare('DELETE FROM companion_goals WHERE updated_at < ?')
       .run(this.now() - days * 86_400_000);
     this.projects.prune();
+    this.continuity?.pruneRecords();
+    this.reviews?.pruneRecords();
+    this.routines?.pruneRecords();
+    if (days > 0) this.db.prepare('DELETE FROM companion_project_feedback WHERE created_at<?').run(this.now() - days * 86400000);
+    this.db.exec(`DELETE FROM companion_project_feedback WHERE project_id NOT IN (SELECT id FROM companion_projects);
+      DELETE FROM companion_project_feedback WHERE id NOT IN (SELECT id FROM companion_project_feedback ORDER BY id DESC LIMIT 90)`);
   }
 
   list() {

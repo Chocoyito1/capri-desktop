@@ -125,6 +125,11 @@ class ProjectCompanion {
       this.db.exec('BEGIN IMMEDIATE');
       try {
         this.db.prepare('DELETE FROM companion_project_notes WHERE project_id=?').run(id);
+        this.db.prepare('DELETE FROM companion_checkpoints WHERE scope_id=?').run(id);
+        this.db.prepare('DELETE FROM companion_daily_reviews WHERE scope_id=?').run(id);
+        this.db.prepare('DELETE FROM companion_project_feedback WHERE project_id=?').run(id);
+        this.db.prepare('DELETE FROM companion_routine_runs WHERE scope_id=? OR routine_id IN (SELECT id FROM companion_routines WHERE scope_id=?)').run(id, id);
+        this.db.prepare('DELETE FROM companion_routines WHERE scope_id=?').run(id);
         this.db.prepare('DELETE FROM companion_goals WHERE project_id=?').run(id);
         this.db.prepare('DELETE FROM companion_project_state WHERE selected_id=?').run(id);
         this.db.prepare('DELETE FROM companion_projects WHERE id=?').run(id);

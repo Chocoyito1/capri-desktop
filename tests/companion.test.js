@@ -103,7 +103,8 @@ test('smooth quiet sheets remain continuous including seat folding and loop seam
     assert.deepEqual(p.sample(50,true).pose,p.sample(0).pose,'Reduced motion freezes the base pose');
   }
   assert.equal(ACTS.victory.smooth,undefined);assert.equal(ACTS.zap.smooth,undefined);
-  assert.equal(ACTS.stand.keys.length,4,'Original drawing sequence remains');
+  assert.equal(ACTS.stand.loop,true,'Standing motion remains a looping stance');
+  assert.equal(ACTS.stand.smooth,true,'The original artwork now floats continuously');
 });
 
 test('all companion toggles cross the settings boundary as booleans only',()=>{

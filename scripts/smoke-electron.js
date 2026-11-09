@@ -7,11 +7,11 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 process.env.CAPRI_PORT = '47824';
-const scratch = path.resolve(__dirname, '../../../work');
+const scratch = process.env.CAPRIGPT_SMOKE_ROOT || path.resolve(__dirname, '../.caprigpt-local/smoke');
 fs.mkdirSync(scratch, { recursive: true });
 process.env.CAPRIGPT_TEST_PROFILE = fs.mkdtempSync(path.join(scratch, 'caprigpt-smoke-'));
 process.env.CAPRIGPT_CONNECTION_FILE = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'integration.json');
-let cognitiveProbe, proactiveProbe, reflectionProbe, actionsProbe, interestsProbe, cognitiveSchemaSeen = false, foregroundContext, foregroundWorkspace;
+let cognitiveProbe, proactiveProbe, reflectionProbe, actionsProbe, interestsProbe, groundedProbe, cognitiveSchemaSeen = false, foregroundContext, foregroundWorkspace;
 if (process.argv.includes('--cognitive-only')) {
   require('../src/main/native-windows').context = () => ({ foreground: { app: 'Code', title: 'Synthetic project' } });
   require('../src/main/native-windows').foregroundBounds = () => null;
@@ -21,6 +21,7 @@ if (process.argv.includes('--cognitive-only')) {
     ['cognitive-reflection', 'ReflectionEngine', value => reflectionProbe = value],
     ['action-agent', 'ActionAgent', value => actionsProbe = value],
     ['companion-interests', 'CompanionInterests', value => interestsProbe = value],
+    ['grounded-curiosity', 'GroundedCuriosity', value => groundedProbe = value],
   ]) {
     const module = require('../src/main/' + file), Original = module[key];
     module[key] = class extends Original { constructor(options) { super(options); capture(this); } };
@@ -41,6 +42,54 @@ if (process.argv.includes('--cognitive-only')) {
     }
     foregroundContext = this.context();
     foregroundWorkspace = typeof this.workspace === 'function' ? this.workspace() : this.workspace;
+    if (text === 'Remember a routine named Smoke prep: open Notepad and mute') {
+      this.tools.beginTurn(text);
+      await assert.rejects(this.tools.run('capri_desktop_step', { tool: 'open_app', query: 'Notepad', index: 0, browser: '' },
+        { text, check() {}, signal: new AbortController().signal }), /Teaching a routine saves it only/);
+      const result = await this.tools.run('capri_routines_save', { id: 0, name: 'Smoke prep', scope: 'project', steps: [
+        { action: 'app', target: 'Notepad', value: '', instruction: 'Open Notepad' },
+        { action: 'setting', target: 'muted', value: 'true', instruction: 'Mute Capri' },
+      ] }, { text, check() {}, signal: new AbortController().signal });
+      assert.equal(result.saved, true); this.tools.endTurn(); this.tools.consumeHistoryReset(); this.history = [];
+      delta?.('Saved Smoke prep.'); return 'Saved Smoke prep.';
+    }
+    if (text === 'Smoke prep') {
+      const ctx = { text, check() {}, signal: new AbortController().signal };
+      assert.equal(this.tools.beginTurn(text).name, 'Smoke prep');
+      await this.tools.run('capri_routine_step', { action: 'next', detail: '' }, ctx);
+      await this.tools.run('capri_desktop_step', { tool: 'open_app', query: 'Notepad', index: 0, browser: '' }, ctx);
+      await this.tools.run('capri_routine_step', { action: 'complete', detail: '' }, ctx);
+      await this.tools.run('capri_routine_step', { action: 'next', detail: '' }, ctx);
+      await this.tools.run('capri_settings_change', { patch: '{"muted":true}' }, ctx);
+      const result = await this.tools.run('capri_routine_step', { action: 'complete', detail: '' }, ctx);
+      assert.equal(result.status, 'completed'); assert.equal(this.tools.finishRoutine().finished_steps, 2);
+      this.tools.endTurn(); delta?.('Smoke prep completed: two steps recorded.'); return 'Smoke prep completed: two steps recorded.';
+    }
+    const continuityChanges = {
+      'Remember our goal: Review the handoff': { action: 'add-goal', text: 'Review the handoff' },
+      'Set the next step for Review the handoff to Run a smoke check': { action: 'next-step', text: 'Run a smoke check', goal: true },
+      'Save where we left off: Review the handoff next': { action: 'save-checkpoint', text: 'Review the handoff next' },
+      'Mark Review the handoff done': { action: 'complete-goal', text: '', goal: true },
+    };
+    const update = continuityChanges[text];
+    if (update) {
+      const ctx = { text, check() {}, signal: new AbortController().signal };
+      const data = await this.tools.run('capri_project_lookup', { query: '' }, ctx);
+      const id = update.goal ? data.goals.find(row => row.text === 'Review the handoff').id : 0;
+      const result = await this.tools.run('capri_project_change', { action: update.action, id, text: update.text }, ctx);
+      assert.equal(result.changed, true);
+      this.tools.endTurn(); this.tools.consumeHistoryReset(); this.history = [];
+      delta?.(result.receipt); return result.receipt;
+    }
+    if (text === 'What did we do today?') {
+      const result = await this.tools.run('capri_daily_review', { action: 'today', day: '' },
+        { text, check() {}, signal: new AbortController().signal });
+      this.tools.endTurn(); delta?.(result.text); return result.text;
+    }
+    if (text === 'Why did you ask that?') {
+      const result = await this.tools.run('capri_curiosity_lookup', { id: 0 }, { text, check() {}, signal: new AbortController().signal });
+      this.tools.endTurn(); const message = JSON.stringify(result); delta?.(message); return message;
+    }
     if (!/goal context probe/i.test(text)) assert.ok(this.history.some(row => row.content.includes('What kind of game')));
     delta?.('A platformer sounds fun.'); return 'A platformer sounds fun.';
   };
@@ -82,6 +131,23 @@ if (process.argv.includes('--tts-only') || process.argv.includes('--fullscreen-o
 const taskEffects={apps:[],opened:[],played:[]};
 const speechSessions=[];
 let speechService;
+const compactVoice={requests:[],spoken:[],transcripts:[]};
+if(process.argv.includes('--voice-flow-only') || process.argv.includes('--chat-sounds-only')) {
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
+  require('../src/main/ollama-runtime').executable=()=>null;
+  require('../src/main/ollama').models=async()=>[];
+  const module=require('../src/main/speech'),Original=module.SpeechInput;
+  module.SpeechInput=class extends Original {constructor(options){super({...options,engine:{device:'synthetic',start:async()=>{},stop(){},transcribe:async()=>compactVoice.transcripts.shift()||''}});speechService=this;}};
+  const {CodexBrain}=require('../src/main/codex-brain');
+  CodexBrain.prototype.chat=async function(text,delta,progress,options={}){
+    if(options.outputSchema)return JSON.stringify({intent:'chat',message:'',goals:[],steps:[]});
+    compactVoice.requests.push({text,voice:options.voice});delta('I am here, sweetheart.');return 'I am here, sweetheart.';
+  };
+  const {SpeechOutput}=require('../src/main/tts');
+  SpeechOutput.prototype.warm=()=>{};
+  SpeechOutput.prototype.speak=async function(request){assert(this.allowed(),'Continuous conversation must permit voice output');compactVoice.spoken.push(request.text);return {ok:true,audio:require('../src/main/whisper-engine').wave(Buffer.alloc(16000)).toString('base64')};};
+}
 if(process.argv.includes('--speech-whisper-live')) {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream');
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
@@ -120,6 +186,14 @@ if(process.argv.includes('--tasks-only')) {
     play:async item=>{taskEffects.played.push(item.videoId);return {...item,playing:true};},stop(){},
   });
 }
+if (process.argv.includes('--cognitive-only')) app.on('web-contents-created', (_event, contents) => {
+  contents.on('console-message', (_event, details, legacyMessage) => {
+    const level = typeof details === 'object' ? details.level : details;
+    const message = typeof details === 'object' ? details.message : legacyMessage;
+    if (level === 'error' || level === 3) console.error('[smoke renderer]', message);
+  });
+  contents.on('render-process-gone', (_event, details) => console.error('[smoke renderer exit]', details.reason, details.exitCode));
+});
 require('../src/main/main');
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const limit = setTimeout(() => { console.error('Desktop smoke test timed out'); app.exit(1); }, 150000);
@@ -130,12 +204,63 @@ app.whenReady().then(async () => {
     const js = (source) => win.webContents.executeJavaScript(source);
     for (let i = 0; i < 120 && !await js("document.documentElement.dataset.caprigptReady === 'true'"); i++) await pause(500);
     assert.equal(await js("document.documentElement.dataset.caprigptReady"), 'true');
+    if(process.argv.includes('--voice-flow-only') || process.argv.includes('--chat-sounds-only')) {
+      const until=async(check,label)=>{for(let i=0;i<200;i++){if(await check())return;await pause(50);}throw Error('Timed out: '+label);};
+      await js("host.setConfig({ttsEnabled:true,ttsEngine:'windows',muted:false,volume:0,wakeWordEnabled:true,lang:'en'})");
+      await js(`(async()=>{
+        const {Voice}=await import('./js/voice.js');
+        const original=Voice.prototype.play;
+        window.chatBlips=0;
+        Voice.prototype.play=function(cue,...args){if(cue==='blip')window.chatBlips++;return original.call(this,cue,...args);};
+      })()`);
+      win.webContents.send('capri:command',{name:'chat'});
+      await until(()=>js("document.querySelector('#panel').classList.contains('is-chat')"),'typed chat');
+      await js("document.querySelector('.panel__input').value='Hello';document.querySelector('.panel__chat').requestSubmit()");
+      await until(()=>js("document.querySelector('.panel__line').textContent.includes('I am here')"),'typed reply');
+      assert.equal(compactVoice.spoken.length,0,'Typed chat does not synthesize speech');
+      assert.ok(await js('window.chatBlips > 0'),'Typed replies retain text blips with spoken replies enabled');
+      if(process.argv.includes('--chat-sounds-only')) {
+        await js(`(async()=>{
+          const {Voice}=await import('./js/voice.js');const voice=new Voice();
+          voice.configure({muted:true,volume:.7});voice.play('blip');
+          if(voice.ctx)throw Error('Muted blips must not create audio');
+          const {Chat}=await import('./js/chat.js');
+          const replies=[],blips=[];
+          const chat=new Chat({capri:{},panel:{current:{chat:{mode:'voice'}},stream(){}},
+            voice:{spoken:{enabled:true,updateResponse:t=>replies.push(t)},play:c=>blips.push(c)},
+            brain:{},host:{onChatDelta(){}}});
+          chat.turn=1;chat.onDelta(1,'Voice reply');
+          if(replies.length!==1||blips.length)throw Error('Voice must stream speech without chat blips');
+        })()`);
+        await js('host.setConfig({wakeWordEnabled:false,ttsEnabled:false})');
+        clearTimeout(limit);console.log('PASS: real app text chat blips with TTS enabled; no typed synthesis; voice delta has speech without blips; mute suppresses audio');app.exit(0);return;
+      }
+      const blipsBeforeVoice=await js('window.chatBlips');
+      await until(()=>speechService.current?.mode==='wake','wake listener');
+      compactVoice.transcripts.push('Hey Capri, hello again.');speechService.enqueue(speechService.current,Buffer.alloc(4000));
+      await until(()=>js("!document.getElementById('voice-indicator').hidden"),'compact microphone');
+      await until(()=>compactVoice.spoken.length>0,'spoken wake reply');
+      assert.equal(speechService.current.mode,'conversation');
+      assert.equal(await js("getComputedStyle(document.getElementById('panel')).visibility"),'hidden');
+      assert.equal(await js("document.getElementById('talk-menu').hidden"),true);
+      assert.equal(compactVoice.requests.at(-1).voice,true);
+      assert.equal(await js('window.chatBlips'),blipsBeforeVoice,'Voice conversations do not add text blips');
+      await js("document.getElementById('voice-indicator').click()");
+      await until(()=>js("document.getElementById('voice-indicator').hidden"),'voice end');
+      await js("document.querySelector('[data-talk=voice]').click()");
+      await until(()=>speechService.current?.mode==='conversation','manual continuous voice');
+      assert.equal(await js("document.body.classList.contains('voice-session')"),true);
+      await js("document.getElementById('voice-indicator').click()");
+      await js("host.setConfig({wakeWordEnabled:false,ttsEnabled:false})");await pause(700);
+      clearTimeout(limit);console.log('PASS: real app typed chat blips with TTS enabled, no typed speech, wake voice-only reply without blips, continuous mic, hidden chat, manual compact voice and end control');app.exit(0);return;
+    }
     if (process.argv.includes('--cognitive-only')) {
       require('../src/main/config').save({ gamingMode: false, proactiveEnabled: true, cognitiveEnabled: true,
         autonomyEnabled: true, wakeWordEnabled: false, ttsEnabled: false,
         privacy: { contextEvents: true, contextForeground: true } });
-      cognitiveProbe.observeApp('Code'); cognitiveProbe.observeApp('Code');
-      const question = cognitiveProbe.observeApp('Code'); assert.ok(question);
+      // Use a distinct app so startup foreground events cannot consume its cooldown.
+      cognitiveProbe.observeApp('Smoke Editor'); cognitiveProbe.observeApp('Smoke Editor');
+      const question = cognitiveProbe.observeApp('Smoke Editor'); assert.ok(question);
       powerMonitor.emit('lock-screen');
       assert.equal(reflectionProbe.canRun(), false, 'reflection stays paused while locked');
       assert.equal(await reflectionProbe.run(), false);
@@ -165,14 +290,15 @@ app.whenReady().then(async () => {
       foregroundContext = null;
       await js("document.querySelector('.panel__input').value='Goal context probe';document.querySelector('.panel__chat').requestSubmit()");
       for (let i = 0; i < 100 && !foregroundContext; i++) await pause(50);
-      assert.equal(foregroundContext.savedGoals[0].text, 'Finish Capri roadmap');
-      assert.equal(foregroundContext.savedGoals[0].next_step, 'Review test results');
+      assert.equal(foregroundContext.savedContinuity.find(row => row.type === 'goal').text, 'Finish Capri roadmap');
+      assert.equal(foregroundContext.savedContinuity.find(row => row.type === 'goal').next_step, 'Review test results');
       assert.equal(foregroundContext.companionInterests[0].focus, 'Map a weather-shaped city');
       require('../src/main/config').save({ privacy: { memoryEnabled: true, memoryRecall: false } });
       await pause(100); foregroundContext = null;
       await js("document.querySelector('.panel__input').value='Goal context probe';document.querySelector('.panel__chat').requestSubmit()");
       for (let i = 0; i < 100 && !foregroundContext; i++) await pause(50);
       assert.deepEqual(foregroundContext.savedGoals, []);
+      assert.deepEqual(foregroundContext.savedContinuity, []);
       assert.match((await route('/goals delete 1')).text, /deleted/);
       require('../src/main/config').save({ privacy: { memoryEnabled: true, memoryRecall: true } });
       const alpha = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'alpha'), beta = path.join(process.env.CAPRIGPT_TEST_PROFILE, 'beta');
@@ -204,14 +330,77 @@ app.whenReady().then(async () => {
       assert.equal((await probe(9002)).ok, true);
       assert.equal(foregroundWorkspace, fs.realpathSync(alpha));
       assert.equal(foregroundContext.currentProject.name, 'alpha');
-      assert.equal(foregroundContext.currentProject.notes.some(row => row.kind === 'reported-outcome'), true);
-      assert.equal(foregroundContext.savedGoals[0].text, 'Keep the project scoped');
+      assert.equal(foregroundContext.savedContinuity.some(row => row.type === 'reported-outcome'), true);
+      assert.equal(foregroundContext.savedContinuity.find(row => row.type === 'goal').text, 'Keep the project scoped');
+      const natural = (id, text) => js(`host.chatSend({id:${id},messages:[{role:'user',content:${JSON.stringify(text)}}]})`);
+      for (const [index, text] of ['Remember our goal: Review the handoff',
+        'Set the next step for Review the handoff to Run a smoke check',
+        'Save where we left off: Review the handoff next', 'Mark Review the handoff done'].entries()) {
+        assert.equal((await route(text)).handled, false, 'Natural project requests reach the Codex bridge');
+        assert.equal((await natural(9100 + index, text)).ok, true);
+      }
+      const continuity = JSON.parse((await route('/continuity export')).text);
+      assert.equal(continuity.goals.find(row => row.text === 'Review the handoff').status, 'done');
+      assert.equal(continuity.checkpoint.text, 'Review the handoff next');
+      assert.equal(continuity.checkpoint.needs_review, true);
+      const recap = await natural(9110, 'What did we do today?');
+      assert.equal(recap.ok, true); assert.match(recap.text, /user-marked/);
+      const daily = JSON.parse((await route('/review export')).text);
+      assert.equal(daily.reviews[0].groups.completed[0].text, 'Review the handoff');
+      await controls.webContents.executeJavaScript('document.querySelector("[data-page=awareness]").click()');
+      assert.equal(await controls.webContents.executeJavaScript('Boolean(document.querySelector("[data-key=dailyReviewEnabled]"))'), true);
+      assert.equal(await controls.webContents.executeJavaScript('document.querySelector("[data-key=dailyReviewNotify]").checked'), false);
+      await controls.webContents.executeJavaScript('settingsHost.action("reviews-open")');
+      for (let i=0;i<100 && !await js("document.querySelector('.panel__line').textContent.includes('Daily review')");i++) await pause(50);
+      assert.match(await js("document.querySelector('.panel__line').textContent"), /Daily review/);
+      const savedProjects = groundedProbe.goals();
+      const failedCheck = { workspace: fs.realpathSync(alpha), cwd: alpha, command: 'npm test', exitCode: 1 };
+      assert.equal(savedProjects.projects.recordVerification(failedCheck), true);
+      assert.equal(savedProjects.projects.recordVerification(failedCheck), true);
+      groundedProbe.sync();
+      const groundedQuestion = cognitiveProbe.list().find(row => row.source_kind === 'project-check');
+      assert.ok(groundedQuestion); assert.equal(cognitiveProbe.conversationCandidates().length, 0);
+      assert.equal(cognitiveProbe.recordReflection(groundedQuestion.id, { question: 'Would comparing the two observed test failures clarify the next step?',
+        hypothesis: 'A missing detail may explain the nonzero exits.', counterpoint: 'Exit codes do not establish the cause.',
+        confidence: 0.4, priority: 0.7, next_step: 'ask_later' }, groundedQuestion.evidence_revision), true);
+      assert.equal(cognitiveProbe.conversationCandidates().length, 1);
+      const explained = await natural(9111, 'Why did you ask that?'); assert.equal(explained.ok, true);
+      assert.match(explained.text, /observed-command-exit/);
+      await controls.webContents.executeJavaScript('settingsHost.patch({projectCuriosityEnabled:false})');
+      assert.equal(cognitiveProbe.conversationCandidates().length, 0);
+      await controls.webContents.executeJavaScript('settingsHost.patch({projectCuriosityEnabled:true})');
+      await controls.webContents.executeJavaScript('settingsHost.action("curiosity-open")');
+      for(let i=0;i<100 && !await js("document.querySelector('.panel__line').textContent.includes('project-check')");i++) await pause(50);
+      assert.match(await js("document.querySelector('.panel__line').textContent"), /project-check/);
+      assert.equal((await route("You're repeating yourself")).handled, false);
+      assert.match((await route('/feedback list')).text, /repetitive/);
+      assert.equal(cognitiveProbe.conversationCandidates().length, 0);
+      await route('/feedback clear');
+      savedProjects.projects.recordVerification({ ...failedCheck, exitCode: 0 }); groundedProbe.sync();
+      assert.equal(cognitiveProbe.list().find(row => row.id === groundedQuestion.id).status, 'resolved');
+      const taught = 'Remember a routine named Smoke prep: open Notepad and mute';
+      const routineEffects = [], savedOpen = actionsProbe.desktop.open;
+      actionsProbe.desktop.open = async name => { routineEffects.push(name); return { type: 'app', note: 'Synthetic launch accepted.', windowObserved: true }; };
+      try {
+        assert.equal((await route(taught)).handled, false);
+        assert.equal((await natural(9120, taught)).ok, true);
+        assert.deepEqual(routineEffects, [], 'Teaching must not execute');
+        assert.equal((await route('Smoke prep')).handled, false);
+        assert.equal((await natural(9121, 'Smoke prep')).ok, true);
+        assert.deepEqual(routineEffects, ['Notepad']);
+        assert.equal(require('../src/main/config').load().muted, true);
+        assert.equal(JSON.parse((await route('/routines runs')).text)[0].status, 'completed');
+        await controls.webContents.executeJavaScript('settingsHost.action("routines-open")');
+        for(let i=0;i<100 && !await js("document.querySelector('.panel__line').textContent.includes('Smoke prep')");i++) await pause(50);
+        assert.match(await js("document.querySelector('.panel__line').textContent"), /Smoke prep/);
+      } finally { actionsProbe.desktop.open = savedOpen; }
       actionsProbe.context.record('Synthetic alpha task', 'completed');
       await route('/project open ' + beta);
       assert.equal((await probe(9003)).ok, true);
       assert.equal(foregroundWorkspace, fs.realpathSync(beta));
       assert.deepEqual(foregroundContext.currentProject.notes, []);
       assert.deepEqual(foregroundContext.savedGoals, []);
+      assert.deepEqual(foregroundContext.savedContinuity, []);
       assert.deepEqual(foregroundContext.recentTasks.recentTasks, []);
       const off = await controls.webContents.executeJavaScript('settingsHost.action("project-off")');
       assert.equal(off.state.project, null);
@@ -225,7 +414,7 @@ app.whenReady().then(async () => {
       await route('/companion off');
       assert.equal(JSON.parse((await route('/companion status')).text).enabled, false);
       assert.equal(await proactiveProbe.run(), false);
-      console.log('PASS: tool-free interest generation, persistent foreground interest context, review/dismiss/disable controls, reflection lock gate, proactive replies, goals/recall, project picker races and scoped context. Isolated profile, inference mocked.');
+      console.log('PASS: tool-free interest generation, persistent foreground interest context, review/dismiss/disable controls, reflection lock gate, proactive replies, goals/recall, project picker races, continuity updates, daily recap tools/settings/review button, grounded project inquiries, evidence lookup, feedback, routine teaching/name invocation/tool receipts/review controls and scoped context. Isolated profile, inference mocked.');
       clearTimeout(limit); app.exit(0); return;
     }
     if (process.argv.includes('--tts-only')) {
@@ -415,6 +604,16 @@ app.whenReady().then(async () => {
       // Keep the launcher open: hiding it as pickup starts must not blur and
       // immediately cancel pointer capture.
       assert.equal(await js("!document.querySelector('#talk-menu').hidden"),true);
+      // Rapid repeat clicks must not toggle the launcher closed or blur away.
+      const repeatPoint=await point();
+      for(let i=0;i<2;i++) {
+        win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:2,...repeatPoint});
+        win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:2,...repeatPoint});
+        await pause(30);
+      }
+      assert.equal(await js("!document.querySelector('#talk-menu').hidden"),true,'Double click keeps the launcher open');
+      assert.equal(win.isVisible(),true);
+      assert.equal(await js('window.fullscreenPet.p.alpha > 0.5 && !window.fullscreenPet.stowed'),true,'Double click keeps Capri visible');
       const dragAt=await point(),beforeDrag=await js('({...window.fullscreenPet.pos})');
       win.webContents.sendInputEvent({type:'mouseMove',...dragAt});await pause(30);
       win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...dragAt});
@@ -434,8 +633,21 @@ app.whenReady().then(async () => {
       await clickAt(await buttonPoint('.panel__send'));
       try { await until(()=>js("document.querySelector('.panel__line').textContent==='Left click restored.'"),'Send button receives left click'); }
       catch(error){console.error('Returned chat:',await js("({line:document.querySelector('.panel__line').textContent,input:document.querySelector('.panel__input').value,busy:document.querySelector('.panel__input').disabled,chat:document.querySelector('#panel').className,petBusy:window.fullscreenPet.busy,stance:window.fullscreenPet.stance})"));throw error;}
+      await js(`window.closeTeleports=0;window.beforeClosePos={...window.fullscreenPet.pos};
+        const teleport=window.fullscreenPet.onTeleport;
+        window.fullscreenPet.onTeleport=phase=>{if(phase==='start')window.closeTeleports++;return teleport?.(phase);};true;`);
       await clickAt(await buttonPoint('.panel__close'));
       await until(()=>js("!document.querySelector('#panel').classList.contains('is-chat')||document.querySelector('#panel').hidden"),'Close button receives left click');
+      const closeRevision=(await state()).revision;
+      // A brief native activation rectangle during focus return is not a
+      // real fullscreen entry and must not collapse/reform her in place.
+      fullscreenProbe=fullscreen;await pause(75);fullscreenProbe=null;
+      await pause(350);
+      assert.equal((await state()).revision,closeRevision,'Chat-close focus blip cannot trigger fullscreen animation');
+      assert.equal(await js('window.closeTeleports'),0,'Closing chat never initiates a teleport');
+      assert.equal(await js('window.fullscreenPet.fullscreenProgress || 0'),0);
+      assert.equal(await js('window.fullscreenPet.p.alpha > 0.5'),true);
+      assert.deepEqual(await js('({...window.fullscreenPet.pos})'),await js('window.beforeClosePos'));
       // Existing teleport effects may still be running when fullscreen reverses.
       win.webContents.send('capri:command',{name:'teleport'});
       fullscreenProbe=fullscreen;await pause(100);fullscreenProbe=null;
@@ -476,7 +688,7 @@ app.whenReady().then(async () => {
       await until(async()=>await shown()&&win.isVisible(),'fullscreen ends with manually stowed pet');
       assert.equal(await js("document.querySelector('#capri').hidden && !document.querySelector('#chip').hidden"),true,'Fullscreen does not undo manual stowing');
       assert.equal((await js('host.getConfig()')).visible,false);
-      console.log(`PASS: fullscreen IPC/shader/OS visibility, restored native mouse activation, stationary-pointer routing, trusted left click/drag/Send/Close; detection ${detectionMs} ms, rapid reversals, stale acknowledgments, overlapping teleport, Gaming mode and manual stow. Native fullscreen geometry simulated; chat inference mocked.`);
+      console.log(`PASS: fullscreen IPC/shader/OS visibility, restored native mouse activation, stationary-pointer routing, trusted left click/drag/Send/Close, repeat body clicks stay visible, chat-close focus blip stays still; detection ${detectionMs} ms, rapid reversals, stale acknowledgments, overlapping teleport, Gaming mode and manual stow. Native fullscreen geometry simulated; chat inference mocked.`);
       clearTimeout(limit);app.exit(0);return;
     }
     if(process.argv.includes('--foreground-priority')) {

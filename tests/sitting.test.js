@@ -9,6 +9,7 @@ global.matchMedia=()=>motion;
 async function fixture() {
   const acting=uri(source('acting.js')), util=uri(source('util.js'));
   const code=source('capri.js')
+    .replace("'./speech-aura.js'", JSON.stringify(uri(source('speech-aura.js'))))
     .replace("import { SpriteRenderer, SPRITE } from './sprite.js';",'const SPRITE={feet:{x:128,y:418},head:{x:124,y:132},hip:232,height:420,width:240,pad:56};')
     .replace("from './acting.js'",`from '${acting}'`).replace("from './util.js'",`from '${util}'`);
   const {Capri}=await import(uri(code));const {Player,NEUTRAL}=await import(acting);
@@ -169,4 +170,22 @@ test('chat applies posture locally and releases busy state even when a move fail
   chat.open=true;await chat.send('sit down');assert.deepEqual(poses,[true]);assert.equal(chat.turn,0);assert.deepEqual(busy,[true,false]);
   chat.capri.requestPosture=async()=>{throw Error('interrupted');};
   await chat.send('stand up');assert.equal(chat.turn,0);assert.match(replies.at(-1),/didn’t finish/);
+});
+
+
+test('bouncy original-art gestures keep seated bodies at unit scale and preserve the floor/window anchor',async()=>{
+  for(const floor of [true,false])for(const name of ['idleWave','idleSway','idlePreen','idleStretch',
+    'idleBounce','idleBreathe','idleListen','idleYawn','listen','think','talk']) {
+    const {pet}=await fixture();
+    if(floor){pet.beginRest(true);finish(pet);}else pet.setStance('sit',{perch:{id:1,dx:100}});
+    pet.endAct(false);const anchor={...pet.pos};pet.perform(name);
+    const start=pet.act.player.start,duration=pet.act.player.total*1000/12;
+    for(let time=180;time<duration;time+=16) {
+      pet.animate(start+time);
+      assert.equal(pet.sx,1,`${name} seated width`);assert.equal(pet.sy,1,`${name} seated height`);
+      assert.equal(pet.bob,0,`${name} stays planted`);
+      assert.ok(Math.abs(pet.tilt)<=1.2,'Seated leaning remains restrained');
+      assert.equal(pet.p.sit,1);assert.deepEqual(pet.pos,anchor);
+    }
+  }
 });

@@ -1,5 +1,9 @@
 # Hands-free Hey Capri
 
+> Superseded interaction: see [compact voice conversations](COMPACT-VOICE.md)
+> for the microphone-only UI, silent text chat and speech interruption. The
+> implementation and validation notes below document the earlier panel flow.
+
 Wake listening is enabled by default for this requested upgrade, unless a saved
 wakeWordEnabled preference disables it. Restart Capri, allow the default
 microphone if Windows requests it, and wait for the Hey Capri indicator to report

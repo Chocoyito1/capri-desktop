@@ -6,6 +6,7 @@
 // ("peek"), and falling ("fall") when the window under her goes away or you drop her.
 
 import { SpriteRenderer, SPRITE } from './sprite.js';
+import { SpeechAura } from './speech-aura.js';
 import { ACTS, NEUTRAL, Player, actionForTool, blendPoses } from './acting.js';
 import { sleep, rand, pick, clamp, lerp, ease, tween, reducedMotion, today } from './util.js';
 
@@ -25,10 +26,11 @@ const INK = [0.08, 0.06, 0.11];
 const RED = [1, 0.13, 0.32];
 
 export class Capri {
-  constructor({ root, canvas, image, fx, voice }) {
+  constructor({ root, canvas, image, fx, voice, previewCelArt = false }) {
     this.root = root;
     this.canvas = canvas;
-    this.sprite = new SpriteRenderer(canvas, image);
+    this.speechAura = new SpeechAura(canvas);
+    this.sprite = new SpriteRenderer(canvas, image, { previewCelArt });
     this.fx = fx;
     this.voice = voice;
 
@@ -217,6 +219,7 @@ export class Capri {
     }
     const sx = SPRITE.feet.x + ((x - this.pos.x) / s) * this.facing;
     let sy = SPRITE.feet.y - (fy - y) / s;
+    if (this.celFrame) return this.sprite.hitFrame(this.celFrame, sx, sy);
     if (this.p.sit > 0 && sy > SPRITE.hip) {
       // same fold as the shader: short thighs, legs ridden up
       const c = lerp(1, 0.3, this.p.sit);
@@ -331,6 +334,10 @@ export class Capri {
 
   loop(now) {
     requestAnimationFrame(this.loop);
+    this.speechAura.update(this.speechLevel || 0, now, {
+      visible: !this.hidden && !this.fullscreen && !this.stowed && !this.dormant && !this.gaming,
+      reducedMotion: reducedMotion.matches,
+    });
     if (this.hidden) return;
     if (this.fullscreen) return;
     if (this.gaming && !this.busy && !this.act) return;
@@ -343,13 +350,18 @@ export class Capri {
     this.lastDraw = now;
     this.animate(now);
     const progress = this.fullscreenProgress || 0;
+    this.celFrame = this.sprite.frameFor?.(this, now, reducedMotion.matches) || null;
+    if (this.celFrame) {
+      // All performance is in the drawing; never deform it with the legacy rig.
+      this.bob = this.tilt = 0; this.sx = this.sy = 1;
+    }
     this.sprite.draw(progress ? { ...this.p,
       alpha: this.p.alpha * (1 - progress),
       collapse: reducedMotion.matches ? this.p.collapse : this.p.collapse + (1 - this.p.collapse) * progress,
       dissolve: reducedMotion.matches ? this.p.dissolve : Math.max(this.p.dissolve, progress * 0.5),
       glitch: reducedMotion.matches ? this.p.glitch : Math.max(this.p.glitch, progress * (1 - progress)),
       split: reducedMotion.matches ? this.p.split : Math.max(this.p.split, progress * (1 - progress) * 10),
-    } : this.p);
+    } : this.p, this.celFrame);
     this.place();
   }
 
@@ -395,6 +407,13 @@ export class Capri {
     }
     if (this.mode === 'sleep' && this.stance === 'sit' && !act) {
       Object.assign(pose, { head: 0.12, mane: -0.1, kickL: 0.03, kickR: 0.03, armL: -0.45, armR: -0.45 }); // dozing on the ledge
+    }
+
+    if ((this.stance === 'sit' || this.groundRest) && this.act?.player.act.charm) {
+      // Keep the seat/feet planted; seated charm comes from head, hands and hair.
+      pose.bob = 0;
+      pose.sx = pose.sy = 1;
+      pose.tilt = clamp(pose.tilt, -1.2, 1.2);
     }
 
     p.head = pose.head;

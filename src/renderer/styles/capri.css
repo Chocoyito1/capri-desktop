@@ -111,6 +111,16 @@ body {
   display: block;
 }
 
+/* Voice energy hugs the current drawing, including her mane and moving limbs.
+   Keep it on the canvas so facing, scale and posture carry the aura with her.
+   JS eases its envelope at display cadence, independently of her cel timing. */
+.capri__sprite.has-speech-aura {
+  filter:
+    drop-shadow(-2px 1px 1px rgb(178 111 255 / calc(var(--speech-aura) * .85)))
+    drop-shadow(2px -1px 3px rgb(49 255 150 / calc(var(--speech-aura) * .65)))
+    drop-shadow(0 0 calc(5px + var(--speech-aura) * 9px) rgb(131 58 235 / calc(var(--speech-aura) * .8)));
+}
+
 .fx {
   position: fixed;
   inset: 0;
@@ -900,7 +910,16 @@ body {
 .wake-indicator[hidden] { display: none; }
 .wake-indicator[data-listening='true'] { color: #31ff72; border-color: #31ff72; }
 .wake-indicator:focus-visible { outline: 2px solid #31ff72; outline-offset: 3px; }
-.voice-session .panel { visibility: visible !important; pointer-events: auto !important; }
+.voice-session .panel, .voice-session .ticker, .voice-session .talk-menu { visibility: hidden !important; pointer-events: none !important; }
+.voice-indicator { position:fixed; z-index:36; width:30px; height:30px; padding:6px; border-radius:50%;
+  transform:translate(-50%,-100%); color:#ae92dd; background:#170e24ed; border:1px solid #735494;
+  display:grid; place-items:center; cursor:pointer; box-shadow:0 2px 12px #0004; }
+.voice-indicator[hidden] { display:none; }
+.voice-indicator svg { width:16px; height:16px; }
+.voice-indicator[data-state='listening'] { color:#64e9ae; border-color:#64e9ae; }
+.voice-indicator[data-state='thinking'], .voice-indicator[data-state='starting'] { opacity:.65; }
+.voice-indicator[data-state='speaking'] { color:#ddc6ff; border-color:#b088e1; }
+.voice-indicator:focus-visible { outline:2px solid #64e9ae; outline-offset:3px; }
 
 /* Conversation surfaces follow the launcher's circles, with quieter violet ink. */
 .talk-menu__choices { gap: 16px; }

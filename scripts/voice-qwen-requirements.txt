@@ -1,0 +1,5 @@
+# Install matching CUDA PyTorch wheels separately; RTX 50-series requires cu128.
+faster-qwen3-tts==0.5.4
+transformers==5.15.1
+numpy==2.4.6
+soundfile==0.14.0

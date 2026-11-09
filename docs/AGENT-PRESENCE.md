@@ -58,9 +58,15 @@ context. Disabling activity context still allows general conversation; disabling
 autonomy or proactive conversation stops these opportunities entirely.
 
 Separate `CognitiveFoundation` / `ReflectionEngine` services persist tentative
-questions after repeated foreground app activations. Reflection compares fresh
-evidence revisions with previous hypotheses, at most twice per rolling hour.
-This is private app-level inquiry, not a record of user intent or daily learning.
+questions from app patterns and [saved project evidence](GROUNDED-CURIOSITY.md).
+Reflection compares fresh evidence revisions with previous hypotheses, at most
+twice per rolling hour. Project records require Memory/recall and the project
+curiosity switch; whole source payloads follow the memory prompt budget and are
+sent to OpenAI for private reflection. Changed/forgotten sources invalidate their
+dependent speculative reviews. App-pattern inquiries stay private; eligible
+grounded questions share the conversation scheduler, a six-hour global question
+budget and a twenty-four-hour topic cooldown. Explicit categorical feedback and
+topic dismissals are respected. This is not a record of user intent or emotion.
 Both background services share a tool-free, history-free Codex adapter. They
 cannot capture screenshots, click, execute commands or change personal memories.
 The older `autonomy.js` observer remains in the repository but is not constructed
@@ -94,6 +100,23 @@ on disk for this feature, and it adds no keyboard hooks or keylogging. Selected
 snapshots and context are sent to OpenAI for reasoning. The provider's handling is
 separate from Capri's ephemeral local state. Personal memories remain in SQLite
 under their existing recall, save, edit, retention and confirmation controls.
+
+## Reusable routines
+
+[Named routines](REUSABLE-ROUTINES.md) let the user teach an ordered process, save
+it in the existing local goal database, then invoke it by exact name or a run
+request. Default scope is the selected project, otherwise global. A server-side
+match binds that current request to one immutable definition/version for the turn;
+stored recipes, pages and ordinary context cannot create an invocation themselves.
+Teaching-only turns disable native execution and block local workflow effects.
+
+Execution reuses the foreground Codex/Capri tools with sequential receipt-backed
+step tracking. Failed commands/actions, cancellation, permission revocation or
+changed definitions/projects stop progress; no background task or separate shell
+runner is introduced. Ordinary sandbox, consequential approvals and fresh-screen
+requirements remain. Names/definitions follow Memory/recall controls, and local
+review/export/deletion remain available offline. Run history contains bounded
+statuses/counts/result categories rather than transcripts or command output.
 
 ## Saved goals
 

@@ -61,7 +61,6 @@ export class Dictation {
   async toggle(){
     if(this.id){this.stop();return;}
     if(this.input.disabled||!this.panel.current?.chat||!this.canListen())return;
-    this.panel.setConversationMode?.('voice');
     await this.beforeStart();
     if(this.id||this.input.disabled||!this.panel.current?.chat||!this.canListen())return;
     if(this.input.maxLength>0&&this.input.value.length>=this.input.maxLength

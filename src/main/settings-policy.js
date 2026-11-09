@@ -5,10 +5,10 @@ function settingsPatch(input, displays = []) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('Invalid settings.');
   const result = {};
   for (const [key, value] of Object.entries(input)) {
-    if (['proactiveEnabled', 'cognitiveEnabled', 'interestsEnabled', 'wakeWordEnabled', 'systemAccess', 'screenAwareness', 'autonomyEnabled', 'autonomyScreen', 'ttsEnabled', 'muted', 'wander', 'possess', 'windowTracking', 'idleAnimations', 'cursorInteractions', 'personality', 'dailyRoutine', 'surpriseAnimations'].includes(key) && typeof value === 'boolean') result[key] = value;
-    else if (key === 'ttsEngine' && ['windows', 'chatterbox', 'f5'].includes(value)) result[key] = value;
+    if (['routinesEnabled', 'projectCuriosityEnabled', 'dailyReviewEnabled', 'dailyReviewNotify', 'proactiveEnabled', 'cognitiveEnabled', 'interestsEnabled', 'wakeWordEnabled', 'systemAccess', 'screenAwareness', 'autonomyEnabled', 'autonomyScreen', 'ttsEnabled', 'muted', 'wander', 'possess', 'windowTracking', 'idleAnimations', 'cursorInteractions', 'personality', 'dailyRoutine', 'surpriseAnimations'].includes(key) && typeof value === 'boolean') result[key] = value;
+    else if (key === 'ttsEngine' && ['windows', 'qwen', 'chatterbox', 'f5'].includes(value)) result[key] = value;
     else if (key === 'ttsDevice' && ['cpu', 'cuda'].includes(value)) result[key] = value;
-    else if (['ttsPython', 'ttsReference', 'ttsReferenceText'].includes(key) && typeof value === 'string' && value.length <= 2000 && !value.includes('\0')) result[key] = value;
+    else if (['ttsPython', 'ttsModel', 'ttsReference', 'ttsReferenceText'].includes(key) && typeof value === 'string' && value.length <= 2000 && !value.includes('\0')) result[key] = value;
     else if (['codexExecutable', 'codexModel'].includes(key) && typeof value === 'string' && value.length <= 2000 && !value.includes('\0')) result[key] = value;
     else if (key === 'codexEffort' && ['low', 'medium', 'high', 'xhigh'].includes(value)) result[key] = value;
     else if (key === 'autonomyIntervalSeconds' && [60, 90, 180, 300].includes(value)) result[key] = value;

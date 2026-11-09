@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('host', {
   wakeEndSession: () => ipcRenderer.send('wake:end-session'),
   speechStart: request => ipcRenderer.invoke('speech:start', request),
   speechAudio: request => ipcRenderer.send('speech:audio', request),
+  speechConversation: request => ipcRenderer.invoke('speech:conversation', request),
+  speechReset: request => ipcRenderer.send('speech:reset', request),
   speechStop: request => ipcRenderer.invoke('speech:stop', request),
   speechCancel: request => ipcRenderer.send('speech:cancel', request),
   onSpeechState: on('speech:state'),

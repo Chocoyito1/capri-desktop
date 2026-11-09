@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { QwenVoice } = require('./qwen-voice');
 
 function spokenText(text) {
   return String(text || '').replace(/```[\s\S]*?```/g, ' ').replace(/\[\[[\s\S]*?\]\]/g, '')
@@ -14,11 +15,13 @@ class SpeechOutput {
   constructor({ root, config, allowed, notify = () => {}, launch = spawn }) {
     Object.assign(this, { root, config, allowed, notify, launch });
     this.epoch = 0;
+    this.qwen = new QwenVoice({ root, notify, launch });
   }
   cancel(notify = true) {
     this.epoch++;
     this.job?.kill();
     this.job = null;
+    this.qwen.cancel();
     if (notify) this.notify({ type: 'stopped' });
   }
   async speak(request) {
@@ -26,6 +29,11 @@ class SpeechOutput {
     const epoch = this.epoch, cfg = this.config();
     const text = typeof request?.text === 'string' ? spokenText(request.text) : '';
     if (!cfg.ttsEnabled || cfg.muted || !this.allowed() || !text) return { ok: false, error: 'speech-output-paused' };
+    if (cfg.ttsEngine === 'qwen') {
+      if (typeof request.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(request.id)) return { ok: false, error: 'Invalid voice request.' };
+      return this.qwen.speak(cfg, { id: request.id, text }, () => epoch === this.epoch && this.allowed() && this.config().ttsEnabled && !this.config().muted);
+    }
+    this.qwen.close();
     if (!['windows', 'chatterbox', 'f5'].includes(cfg.ttsEngine)) return { ok: false, error: 'Invalid voice engine.' };
     let dir, child;
     try {
@@ -58,6 +66,11 @@ class SpeechOutput {
       if (this.job === child) this.job = null;
       if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     }
+  }
+  close() { this.cancel(); this.qwen.close(); }
+  warm() {
+    const cfg = this.config();
+    if (cfg.ttsEngine === 'qwen' && cfg.ttsEnabled && !cfg.muted) return this.qwen.ensure(cfg).catch(() => {});
   }
 }
 module.exports = { SpeechOutput, spokenText };

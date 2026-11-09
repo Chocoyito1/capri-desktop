@@ -14,6 +14,7 @@ import { FullscreenPresence } from './fullscreen-presence.js';
 import { PointerRecovery } from './pointer-recovery.js';
 import { Dictation } from './dictation.js';
 import { WakeListener } from './wake-listener.js';
+import { VoiceCall } from './voice-call.js';
 import { LINES } from './lines.js';
 import { pick } from './util.js';
 
@@ -86,7 +87,7 @@ async function boot() {
   new IntegrationCompanion({ capri, panel, voice, host, brain });
 
   // Click-through everywhere except on her body, the panel and her biochip.
-  let talkMenu, wakeListener;
+  let talkMenu, wakeListener, voiceCall;
   let interactive = false;
   let mouse = null;
   let pointerRevision = 0;
@@ -102,7 +103,7 @@ async function boot() {
     if (!mouse) return setInteractive(false, force);
     const r = panel.rect();
     const onPanel = r && mouse.x >= r.left && mouse.x <= r.right && mouse.y >= r.top && mouse.y <= r.bottom;
-    const indicator = document.getElementById('wake-indicator');
+    const indicator = document.getElementById('voice-indicator');
     const ir = !indicator.hidden && indicator.getBoundingClientRect();
     const onWakeIndicator = ir && mouse.x >= ir.left && mouse.x <= ir.right && mouse.y >= ir.top && mouse.y <= ir.bottom;
     document.body.style.cursor = onChip() ? 'pointer' : '';
@@ -166,6 +167,7 @@ async function boot() {
     // pointing at something: the panel goes on her other side, so it doesn't cover it
     panel.setAnchor({ ...head, lean: capri.pointing ? -capri.pointing.dir : 0 }, capri.view);
     talkMenu?.place(head, capri.view);
+    voiceCall?.place(head, capri.view);
     // she may have moved out from under a still pointer: never leave a dead click zone behind
     refreshHit();
   };
@@ -192,29 +194,40 @@ async function boot() {
   // the red light has gone up (never during, nothing should cover that)
   capri.onGaze = () => host.companionEvent?.('idle');
   capri.onClick = () => {
+    voiceCall?.end();
     if (panel.visible) panel.hide();
-    talkMenu?.toggle();
+    talkMenu?.show();
   };
-  panel.onChar = (kind) => { if (!voice.spoken?.config?.ttsEnabled) voice.play('blip', { mood: kind }); };
+  panel.onChar = (kind) => {
+    if (panel.current?.chat?.mode === 'text' || !voice.spoken?.config?.ttsEnabled) voice.play('blip', { mood: kind });
+  };
   panel.onTalk = (talking) => talking && capri.mode !== 'sleep'
     && !capri.act?.player.name.startsWith('idle') && capri.perform('talk');
   panel.onFocus = () => host.focusOverlay(true); // Restore typing after a fullscreen exit, only on a user click.
   capri.onMenu = () => host.openMenu();
 
   voice.spoken = new SpeechPlayer({ host, voice,
+    onPlayback: active => voiceCall?.playback(active),
     onLevel: level => {
       capri.speechLevel = level;
       if (level > 0.015 && !capri.act && capri.mode !== 'sleep') capri.perform('talk');
     },
-    onError: error => { const status = panel.el.querySelector('.panel__dictation-status'); status.textContent = `Voice: ${error}`; status.hidden = false; },
+    onError: error => {
+      if (voiceCall?.active) { voiceCall.end(); return; }
+      if (!chat?.open) return;
+      const status = panel.el.querySelector('.panel__dictation-status'); status.textContent = `Voice: ${error}`; status.hidden = false;
+    },
   });
   voice.spoken.configure(config);
   host.onFullscreenState(state => { if (state.active && !wakeListener?.session) voice.spoken.stop(); });
   const chat = new Chat({ capri, panel, voice, host, brain });
   capri.onIdleWave = () => {}; // A wave is an animation; speech comes from Codex.
-  const publishCompanionState = () => host.companionState?.({ mood: capri.companion.mood,
+  const publishCompanionState = () => {
+    if (voiceCall?.active) capri.nextMove = capri.nextGaze = performance.now() + 60000;
+    return host.companionState?.({ mood: capri.companion.mood,
     routine: capri.companion.options.dailyRoutine ? (new Date().getHours() < 6 ? 'night' : new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening') : '',
-    chatOpen: chat.open, canSpeak: !wakeListener?.session && !talkMenu?.visible && !capri.busy && capri.mode !== 'alert' && !['alert', 'error', 'report'].includes(panel.current?.kind) });
+    chatOpen: chat.open || Boolean(voiceCall?.active), voiceActive: Boolean(voiceCall?.active), canSpeak: !wakeListener?.session && !talkMenu?.visible && !capri.busy && capri.mode !== 'alert' && !['alert', 'error', 'report'].includes(panel.current?.kind) });
+  };
   setInterval(publishCompanionState, 15000);
   host.onBodyAction?.(async ({ id, action }) => {
     let result;
@@ -224,28 +237,42 @@ async function boot() {
   });
   const dictation = new Dictation({ panel, host, language: () => brain.lang,
     canListen: () => chat.open && (!capri.gaming && !capri.fullscreen || wakeListener?.session),
-    beforeStart: async () => wakeListener?.pause() });
+    beforeStart: async () => { voiceCall?.end(); voice.spoken.stop(); wakeListener?.pause(); } });
+  let restoreStowed = false;
+  voiceCall = new VoiceCall({ host, speaker: voice.spoken, history: chat,
+    indicator: document.getElementById('voice-indicator'),
+    onStart: async () => {
+      if (!voice.spoken.enabled) throw Error('Enable spoken replies in Sound settings first.');
+      dictation.cancel(); chat.close(); panel.hide(); panel.setTicker(null); talkMenu?.hide();
+      wakeListener.session = true; document.body.classList.add('voice-session');
+      restoreStowed = capri.stowed; if (capri.stowed) await capri.unstow();
+      capri.wake(); capri.nextMove = capri.nextGaze = performance.now() + 60000;
+      voiceCall.place(capri.head(), capri.view); publishCompanionState(); refreshHit(true);
+    },
+    onEnd: () => {
+      wakeListener.session = false; document.body.classList.remove('voice-session');
+      if (restoreStowed) capri.stowNow(); restoreStowed = false;
+      publishCompanionState(); refreshHit(true);
+    } });
+  chat.onStart = () => voiceCall.end();
   talkMenu = new TalkMenu({ el: document.getElementById('talk-menu'), capri, host,
     language: () => brain.lang, onChange: () => refreshHit(),
     onChoose: async (mode, greeting) => {
+      if (mode === 'voice') { wakeListener.pause(); await voiceCall.start(); return; }
+      voiceCall.end();
       await chat.start(false, greeting, { mode });
-      if (mode === 'voice' && chat.open && !chat.turn) await dictation.toggle();
     } });
-  brain.onTalk = () => { talkMenu.hide({ keepFocus: true }); return chat.start(); };
+  brain.onTalk = () => { voiceCall.end(); talkMenu.hide({ keepFocus: true }); return chat.start(); };
   wakeListener = new WakeListener({ host, indicator: document.getElementById('wake-indicator'),
-    blocked: () => Boolean(dictation.id || voice.spoken.pending || voice.spoken.source),
-    onSessionEnd: () => { document.body.classList.remove('voice-session'); refreshHit(true); },
+    blocked: () => Boolean(voiceCall.active || dictation.id || voice.spoken.pending || voice.spoken.source),
+    onSessionEnd: () => { if (voiceCall.fromWake) voiceCall.end(false); document.body.classList.remove('voice-session'); refreshHit(true); },
     onWake: async event => {
-      talkMenu.hide({ keepFocus: true }); voice.spoken.stop();
-      if (chat.turn) panel.hide();
-      document.body.classList.add('voice-session'); panel.resume();
-      await chat.start(false, brain.lang === 'es' ? 'Te escucho.' : "I'm listening.", { voiceWake: true });
-      if (!chat.open || chat.turn) throw Error('Conversation is unavailable.');
-      dictation.adoptWake(event); refreshHit(true);
+      await voiceCall.start(event);
     } });
-  chat.onClose = () => { if (!panel.leaving && !wakeListener.transferring) wakeListener.endSession(); };
-  panel.onHidden = () => { if (!chat.open && !wakeListener.transferring) wakeListener.endSession(); };
+  chat.onClose = () => { if (!voiceCall.active && !panel.leaving && !wakeListener.transferring) wakeListener.endSession(); };
+  panel.onHidden = () => { if (!voiceCall.active && !chat.open && !wakeListener.transferring) wakeListener.endSession(); };
   wakeListener.configure(config);
+  if (config.wakeWordEnabled) voiceCall.prepare().catch(() => {});
   // The demo's second half, after its fake Claude session: everything she does on her own, one
   // after the other, a line before each.
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -326,7 +353,6 @@ async function boot() {
     if (chat.open) panel.stream(text, { done: true });
     else if (panel.visible && ['alert', 'error', 'report'].includes(panel.current?.kind)) return;
     else panel.say({ kind: 'info', face: 'look', line: text, hold: 10000 });
-    voice.spoken?.speak(text);
   });
   host.onConversation?.(text => {
     if (wakeListener.session || chat.open || panel.visible || talkMenu.visible || capri.gaming || capri.fullscreen ||
@@ -341,7 +367,6 @@ async function boot() {
         if (id === 'quiet') await host.personalRoute('/companion off');
       },
     });
-    voice.spoken?.speak(text);
   });
   new FullscreenPresence({ capri, host, onChange: () => {
     ++pointerRevision;
@@ -371,6 +396,7 @@ async function boot() {
   });
 
   host.onConfig((cfg) => {
+    if ((!cfg.wakeWordEnabled && voiceCall.fromWake) || !cfg.ttsEnabled || cfg.muted) voiceCall.end();
     capri.companion.configure(cfg);
     wakeListener.configure(cfg);
     voice.configure(cfg);
@@ -391,6 +417,7 @@ async function boot() {
     const t = brain.t;
     switch (cmd.name) {
       case 'gamingDeparture':
+        voiceCall.end();
         chat.close();
         panel.hide();
         try {
@@ -412,7 +439,7 @@ async function boot() {
       case 'status':
         brain.status();
         break;
-      case 'chat': talkMenu.hide({ keepFocus: true }); // "Talk to her" in her menu
+      case 'chat': voiceCall.end(); talkMenu.hide({ keepFocus: true }); // "Talk to her" in her menu
         chat.start();
         break;
       case 'memory':
@@ -422,6 +449,21 @@ async function boot() {
         talkMenu.hide({ keepFocus: true });
         await chat.start(true);
         await chat.send('/interests list');
+        break;
+      case 'reviews':
+        talkMenu.hide({ keepFocus: true });
+        await chat.start(true);
+        await chat.send('/review today');
+        break;
+      case 'curiosity':
+        talkMenu.hide({ keepFocus: true });
+        await chat.start(true);
+        await chat.send('/curiosity list');
+        break;
+      case 'routines':
+        talkMenu.hide({ keepFocus: true });
+        await chat.start(false);
+        await chat.send('/routines list');
         break;
       case 'report': // "Mission report" in her menu
         if (capri.stowed) {
@@ -440,6 +482,7 @@ async function boot() {
         break;
       }
       case 'stow': // Ctrl+Alt+C: into her biochip, or back out
+        if (cmd.on) voiceCall.end();
         if (cmd.on) dictation.cancel();
         if (cmd.on) capri.stow();
         else capri.unstow();

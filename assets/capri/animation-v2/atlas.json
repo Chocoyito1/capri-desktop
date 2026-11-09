@@ -1,0 +1,330 @@
+{
+  "version": 1,
+  "image": "atlas.png",
+  "width": 960,
+  "height": 2100,
+  "sources": [
+    {
+      "path": "source.png",
+      "sha256": "8b4b537b81d419255b832715659fc3a43fa573c8f1480c5678e0cdfc704c0b55"
+    },
+    {
+      "path": "idle-source.png",
+      "sha256": "79cf41f1ae841e592f414c5211b9f8b99bcb804c4a288f2c3599bc396f07f9e8"
+    }
+  ],
+  "frames": [
+    {
+      "name": "curious:0",
+      "rect": [
+        0,
+        0,
+        240,
+        420
+      ],
+      "sha256": "aecb4880cdd8866b5fa835e8e2c1eff83ce2f98a518f6b55fe4a73c5648d0db6"
+    },
+    {
+      "name": "curious:1",
+      "rect": [
+        240,
+        0,
+        240,
+        420
+      ],
+      "sha256": "65ad8945f2fef08d6fd6fd4847236ddcac08237d29a300986b49df537c17b6ac"
+    },
+    {
+      "name": "curious:2",
+      "rect": [
+        480,
+        0,
+        240,
+        420
+      ],
+      "sha256": "3084ace30f27f67c8aa4808ef6624c687ce0563bcf137ca20718d67f573456ee"
+    },
+    {
+      "name": "curious:3",
+      "rect": [
+        720,
+        0,
+        240,
+        420
+      ],
+      "sha256": "514bb00e5d3a371e35a9168e7d935a27e8bab16fd8232fe7def89949db317e86"
+    },
+    {
+      "name": "curious:4",
+      "rect": [
+        0,
+        420,
+        240,
+        420
+      ],
+      "sha256": "de270746d01684e7ec83af618eeadc813af7ddd6870600d3d3028909fb8babb6"
+    },
+    {
+      "name": "curious:5",
+      "rect": [
+        240,
+        420,
+        240,
+        420
+      ],
+      "sha256": "f120c85443d649fc15e29b4f465e849dcdf043720bf587c02155bd1fc448e9b9"
+    },
+    {
+      "name": "curious:6",
+      "rect": [
+        480,
+        420,
+        240,
+        420
+      ],
+      "sha256": "c4dc231b65fd4c77745377a24cd16cbc9a949b92989b634d14cd973c7501c717"
+    },
+    {
+      "name": "curious:7",
+      "rect": [
+        720,
+        420,
+        240,
+        420
+      ],
+      "sha256": "c9a043f1fcb190a51fd9f72a9fa872b6df80b2e6410e8bdf7dddc6862fbcc961"
+    },
+    {
+      "name": "breathe:0",
+      "rect": [
+        0,
+        840,
+        240,
+        420
+      ],
+      "sha256": "5cdff13d693646d15cb42bd88aceb7fb76d979546b0d7f2985a5c523d01fbe49"
+    },
+    {
+      "name": "breathe:1",
+      "rect": [
+        240,
+        840,
+        240,
+        420
+      ],
+      "sha256": "6c606a8921c09076fe85a7efb54abb04548db71c62327770e0ed9aa06b918f10"
+    },
+    {
+      "name": "breathe:2",
+      "rect": [
+        480,
+        840,
+        240,
+        420
+      ],
+      "sha256": "0acdafd6310d0e8389c8aa66d2349d5aeef1e5b7a43d2fc6329b4f4f49d62d98"
+    },
+    {
+      "name": "breathe:3",
+      "rect": [
+        720,
+        840,
+        240,
+        420
+      ],
+      "sha256": "96a4852220d930102de0868f7daa7c157e25d97b37d02eef2daaef0e216054e3"
+    },
+    {
+      "name": "breathe:4",
+      "rect": [
+        0,
+        1260,
+        240,
+        420
+      ],
+      "sha256": "0ec3d9ff30eeff55db6ae8c9fed02b72d69105df75768873f2698f5499dac686"
+    },
+    {
+      "name": "breathe:5",
+      "rect": [
+        240,
+        1260,
+        240,
+        420
+      ],
+      "sha256": "4d1d0321fb835777ab7f9e572acf6c36e3a87ef43f137251e9524ddf5d56333d"
+    },
+    {
+      "name": "breathe:6",
+      "rect": [
+        480,
+        1260,
+        240,
+        420
+      ],
+      "sha256": "cee81a4ff0cc5bb9ea34af38dbed7e765a0ed42169b4901e1f6ef6df4ac42f97"
+    },
+    {
+      "name": "breathe:7",
+      "rect": [
+        720,
+        1260,
+        240,
+        420
+      ],
+      "sha256": "ed43fb2e963b9c7c61e5e170fec3f7c3e439e3d3b3bd4de815ea80167b16ba84"
+    },
+    {
+      "name": "breathe:8",
+      "rect": [
+        0,
+        1680,
+        240,
+        420
+      ],
+      "sha256": "36172847d5d7c1387ad0e046385eaf0ad34fe3d4d846b7fb67fd66e250f0f602"
+    },
+    {
+      "name": "breathe:9",
+      "rect": [
+        240,
+        1680,
+        240,
+        420
+      ],
+      "sha256": "cf5609431c54b7f5539a8baca778e3a15d9229542df635da6e7a80b643455f36"
+    },
+    {
+      "name": "breathe:10",
+      "rect": [
+        480,
+        1680,
+        240,
+        420
+      ],
+      "sha256": "4c3279a358dc65f53934b6e0b51e38194b606ef19363a2538fc36f2f6d10170e"
+    },
+    {
+      "name": "breathe:11",
+      "rect": [
+        720,
+        1680,
+        240,
+        420
+      ],
+      "sha256": "25adf71e500d5fc25ecff700977f9691ed379a2a35237ec51f7dfd84f34e1d2d"
+    }
+  ],
+  "clips": {
+    "rest": {
+      "loop": true,
+      "durationMs": 4060,
+      "stillFrame": 0,
+      "entryPose": "stand-neutral",
+      "exitPose": "stand-neutral",
+      "exposures": [
+        [
+          0,
+          1200
+        ],
+        [
+          8,
+          160
+        ],
+        [
+          9,
+          160
+        ],
+        [
+          10,
+          180
+        ],
+        [
+          11,
+          200
+        ],
+        [
+          12,
+          180
+        ],
+        [
+          13,
+          80
+        ],
+        [
+          14,
+          120
+        ],
+        [
+          15,
+          80
+        ],
+        [
+          16,
+          180
+        ],
+        [
+          17,
+          180
+        ],
+        [
+          18,
+          180
+        ],
+        [
+          19,
+          160
+        ],
+        [
+          0,
+          1000
+        ]
+      ]
+    },
+    "curious": {
+      "loop": false,
+      "durationMs": 1920,
+      "stillFrame": 0,
+      "entryPose": "stand-neutral",
+      "exitPose": "stand-neutral",
+      "exposures": [
+        [
+          0,
+          250
+        ],
+        [
+          1,
+          160
+        ],
+        [
+          2,
+          160
+        ],
+        [
+          3,
+          350
+        ],
+        [
+          4,
+          350
+        ],
+        [
+          5,
+          160
+        ],
+        [
+          6,
+          160
+        ],
+        [
+          7,
+          160
+        ],
+        [
+          0,
+          170
+        ]
+      ]
+    }
+  }
+}

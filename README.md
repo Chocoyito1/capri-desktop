@@ -10,6 +10,26 @@ Choose a workspace in **Control room → Connections → Project companion**.
 reported outcomes separate, and can save recognized command-exit receipts when
 Memory is enabled. Selecting a folder does not start work or approve actions.
 
+[Restart continuity](docs/COMPANION-CONTINUITY.md) adds natural-language goal and
+decision updates, explicitly saved resume points, and project recall after
+restarting. Enable Memory, save a goal or handoff in chat, then ask where you left
+off. `/continuity status`, `export` and `forget` provide local review controls.
+
+[Daily reflection](docs/DAILY-REVIEW.md) summarizes saved progress, open goals and
+next steps. Ask what you did today or use `/review today`. With Memory enabled,
+reviews are generated quietly after 6 pm when available; notifications are off by
+default. Review controls are in **PC awareness > Daily reviews**.
+
+[Grounded curiosity](docs/GROUNDED-CURIOSITY.md) connects private questions to saved
+check results, planning decisions and explicit feedback. Stronger evidence can
+support a bounded question; app repetition alone stays private. Review controls
+are in **PC awareness > Grounded curiosity** and `/curiosity list`.
+
+[Reusable routines](docs/REUSABLE-ROUTINES.md) let you teach a named process, keep
+its ordered steps across restarts, then invoke it by name. For example, teach
+**Study setup** to open Chrome and mute Capri, then say **Study setup**. Saving
+does not execute or schedule it. Review definitions and runs with `/routines`.
+
 [Chosen interests](docs/COMPANION-INTERESTS.md) let Capri develop a persistent
 creative focus and return to it across conversations. Review or disable these in
 **PC awareness**. The same update restores input after fullscreen and preserves

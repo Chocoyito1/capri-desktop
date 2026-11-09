@@ -13,7 +13,7 @@ export class WakeListener {
   }
   configure(config) { this.enabled = config.wakeWordEnabled === true; if (!this.enabled) { this.pause(); this.endSession(); } this.tick(); }
   render(message) {
-    this.indicator.hidden = false;
+    this.indicator.hidden = true; // Background wake listening needs no permanent desktop badge.
     this.indicator.textContent = message || (!this.enabled ? 'Hey Capri: off' : this.id ? 'Hey Capri: listening' : 'Hey Capri: paused');
     this.indicator.setAttribute('aria-pressed', String(this.enabled));
     this.indicator.title = this.enabled ? 'Local wake listener. Click to turn off.' : 'Click to enable local Hey Capri listening.';

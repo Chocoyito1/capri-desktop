@@ -32,6 +32,9 @@ class CognitiveFoundation {
       ['evidence_revision', 'INTEGER NOT NULL DEFAULT 1'],
       ['reviewed_revision', 'INTEGER NOT NULL DEFAULT 0'],
       ['revisit_at', 'INTEGER'],
+      ['source_kind', "TEXT NOT NULL DEFAULT 'app'"],
+      ['scope_id', 'INTEGER'], ['askable', 'INTEGER NOT NULL DEFAULT 0'],
+      ['asked_revision', 'INTEGER NOT NULL DEFAULT 0'], ['last_asked_at', 'INTEGER'],
     ]) if (!columns.includes(name)) this.db.exec(`ALTER TABLE curiosity_questions ADD COLUMN ${name} ${type}`);
     if (!columns.includes('reviewed_revision')) this.db.exec(`UPDATE curiosity_questions
       SET reviewed_revision=evidence_revision, revisit_at=reflected_at+21600000 WHERE reflected_at IS NOT NULL`);
@@ -40,6 +43,10 @@ class CognitiveFoundation {
       reflection TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS curiosity_attempts (at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation_state (id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL);`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS curiosity_suppressions(subject TEXT PRIMARY KEY,until_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS curiosity_asks(at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS curiosity_topic_asks(subject TEXT PRIMARY KEY,at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS curiosity_project_clear(id INTEGER PRIMARY KEY CHECK(id=1),at INTEGER NOT NULL);`);
     this.settings = settings;
     this.context = context;
     this.now = now;
@@ -53,22 +60,36 @@ class CognitiveFoundation {
     const cfg = this.settings();
     const p = require('./pc-context').permissions(cfg.privacy);
     return cfg.cognitiveEnabled !== false && cfg.agentEnabled !== false &&
-      !cfg.gamingMode && p.contextEvents && p.contextForeground;
+      !cfg.gamingMode && ((p.contextEvents && p.contextForeground) || Boolean(this.projectSource?.enabled()));
+  }
+  appAllowed() {
+    const p = require('./pc-context').permissions(this.settings().privacy);
+    return this.allowed() && p.contextEvents && p.contextForeground;
+  }
+  evidenceFor(row, options) {
+    if (row.source_kind && row.source_kind !== 'app') return this.projectSource?.resolve(row, options) || null;
+    return this.appAllowed() ? row.evidence : null;
+  }
+  isCurrent(row) {
+    if (row.source_kind && row.source_kind !== 'app') this.projectSource?.sync();
+    const current = this.db.prepare("SELECT * FROM curiosity_questions WHERE id=? AND status='open'").get(row.id);
+    return Boolean(current && current.subject === row.subject && current.created_at === row.created_at &&
+      (current.source_kind === 'app' || (current.evidence_revision === row.evidence_revision && current.evidence === row.evidence)) && this.evidenceFor(current));
   }
 
   async foregroundChanged() {
-    if (!this.allowed() || this.busy || this.closed) return null;
+    if (!this.appAllowed() || this.busy || this.closed) return null;
     this.busy = true;
     try {
       const snapshot = await this.context.snapshot('curiosity-foreground', ['contextForeground']);
       // Revalidate after awaiting native collection / revoked permissions.
-      if (!this.allowed() || this.closed || snapshot.unavailable || snapshot.provider?.unavailable) return null;
+      if (!this.appAllowed() || this.closed || snapshot.unavailable || snapshot.provider?.unavailable) return null;
       return this.observeApp(snapshot.foreground?.app);
     } finally { this.busy = false; }
   }
 
   observeApp(value) {
-    if (!this.allowed() || this.closed) return null;
+    if (!this.appAllowed() || this.closed) return null;
     const app = String(value || '').trim();
     if (!VALID_APP.test(app)) return null;
     const subject = app.toLowerCase();
@@ -103,7 +124,7 @@ class CognitiveFoundation {
     return this.db.prepare(`SELECT * FROM curiosity_questions WHERE status='open'
       AND evidence_revision>reviewed_revision AND (revisit_at IS NULL OR revisit_at<=?)
       ORDER BY COALESCE(priority,0.5) DESC, COALESCE(reflected_at,created_at), id LIMIT ?`)
-      .all(this.now(), Math.min(10, Math.max(1, limit)));
+      .all(this.now(), 100).filter(row => this.evidenceFor(row)).slice(0, Math.min(10, Math.max(1, limit)));
   }
 
   recordReflection(id, reflection, revision) {
@@ -114,6 +135,7 @@ class CognitiveFoundation {
     const now = this.now();
     const row = this.db.prepare("SELECT * FROM curiosity_questions WHERE id=? AND status='open'").get(id);
     if (!row) return false;
+    if (!this.evidenceFor(row) || (row.source_kind !== 'app' && revision !== undefined && revision !== row.evidence_revision)) return false;
     revision ??= row.evidence_revision;
     if (!Number.isSafeInteger(revision) || revision <= row.reviewed_revision || revision > row.evidence_revision) return false;
     this.db.exec('BEGIN IMMEDIATE');
@@ -137,6 +159,8 @@ class CognitiveFoundation {
   }
 
   reviewContext(id) {
+    const source = this.db.prepare('SELECT * FROM curiosity_questions WHERE id=?').get(id);
+    if (source?.source_kind !== 'app' && source && !this.evidenceFor(source, { review: true })) return [];
     return this.db.prepare('SELECT evidence_revision,reflection,created_at FROM curiosity_reviews WHERE question_id=? ORDER BY id DESC LIMIT 3')
       .all(id).reverse().map(row => ({ ...row, reflection: JSON.parse(row.reflection) }));
   }
@@ -170,14 +194,35 @@ class CognitiveFoundation {
   }
 
   list(limit = 20) {
+    this.prune();
     return this.db.prepare('SELECT * FROM curiosity_questions ORDER BY updated_at DESC LIMIT ?')
-      .all(Math.min(100, Math.max(1, limit)));
+      .all(100).filter(row => row.source_kind === 'app' || this.evidenceFor(row, { review: true })).slice(0, Math.min(100, Math.max(1, limit)));
+  }
+
+  conversationCandidates() {
+    if (!this.allowed() || this.projectSource?.quietFeedback()) return [];
+    if (this.db.prepare('SELECT at FROM curiosity_asks WHERE at>? LIMIT 1').get(this.now() - 6 * 3600000)) return [];
+    return this.list(100).filter(row => row.source_kind !== 'app' && row.status === 'open' && row.askable &&
+      row.next_step === 'ask_later' && row.reviewed_revision === row.evidence_revision && row.asked_revision < row.evidence_revision &&
+      !this.db.prepare('SELECT subject FROM curiosity_topic_asks WHERE subject=? AND at>?').get(row.subject, this.now() - 24 * 3600000) &&
+      (row.last_asked_at === null || this.now() - row.last_asked_at >= 24 * 3600000) && this.evidenceFor(row)).slice(0, 10);
+  }
+  reserveQuestion(id, revision) {
+    const row = this.conversationCandidates().find(row => row.id === id && row.evidence_revision === revision);
+    if (!row) return false;
+    this.db.prepare('UPDATE curiosity_questions SET asked_revision=?,last_asked_at=? WHERE id=?').run(revision, this.now(), id);
+    this.db.prepare('INSERT INTO curiosity_asks(at) VALUES(?)').run(this.now());
+    this.db.prepare('INSERT INTO curiosity_topic_asks(subject,at) VALUES(?,?) ON CONFLICT(subject) DO UPDATE SET at=excluded.at').run(row.subject, this.now());
+    return true;
   }
 
   update(id, status) {
     if (!['dismissed','resolved'].includes(status)) throw Error('Invalid question status.');
+    const row = this.db.prepare('SELECT * FROM curiosity_questions WHERE id=?').get(id);
     const result = this.db.prepare("UPDATE curiosity_questions SET status=?, updated_at=? WHERE id=? AND status='open'")
       .run(status, this.now(), id);
+    if (Number(result.changes) && row.source_kind !== 'app') this.db.prepare('INSERT INTO curiosity_suppressions(subject,until_at) VALUES(?,?) ON CONFLICT(subject) DO UPDATE SET until_at=excluded.until_at')
+      .run(row.subject, this.now() + 30 * 86400000);
     return Number(result.changes) === 1;
   }
 
@@ -187,6 +232,9 @@ class CognitiveFoundation {
     this.db.exec(`DELETE FROM curiosity_questions WHERE id NOT IN
       (SELECT id FROM curiosity_questions ORDER BY updated_at DESC LIMIT ${MAX_QUESTIONS})`);
     this.db.exec('DELETE FROM curiosity_reviews WHERE question_id NOT IN (SELECT id FROM curiosity_questions)');
+    this.db.prepare('DELETE FROM curiosity_suppressions WHERE until_at<=?').run(this.now());
+    this.db.prepare('DELETE FROM curiosity_asks WHERE at<?').run(this.now() - 24 * 3600000);
+    this.db.prepare('DELETE FROM curiosity_topic_asks WHERE at<?').run(this.now() - 24 * 3600000);
   }
 
   clear() {
@@ -194,6 +242,8 @@ class CognitiveFoundation {
     this.db.exec('DELETE FROM curiosity_reviews');
     this.seen.clear();
     this.last.clear();
+    this.db.exec('DELETE FROM curiosity_suppressions');
+    this.db.prepare('INSERT INTO curiosity_project_clear(id,at) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET at=excluded.at').run(this.now());
   }
 
   status() {

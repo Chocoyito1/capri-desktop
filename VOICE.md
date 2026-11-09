@@ -1,4 +1,6 @@
-> Current hands-free behavior: [Hey Capri wake listening](docs/WAKE-WORD.md).
+> Current behavior: [compact, interruptible voice conversations](docs/COMPACT-VOICE.md). Text chat is silent. The setup notes below describe earlier iterations.
+> Expressive voice setup: [Qwen voice](docs/EXPRESSIVE-VOICE.md).
+> Previous hands-free behavior: [Hey Capri wake listening](docs/WAKE-WORD.md).
 > Wake-addressed requests can auto-send; manual mic dictation remains reviewable.
 > Earlier setup notes below may describe the previous click-only behavior.
 

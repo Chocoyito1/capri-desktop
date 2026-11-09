@@ -3,6 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ProactiveConversation, validate } = require('../src/main/proactive-conversation');
 const { packConversation } = require('../src/main/conversation-context');
+const { CHARACTER_VOICE, PERSONALITY_SUMMARY } = require('../src/main/personality');
+const { registry } = require('../src/main/capabilities');
 function fixture(t, options = {}) {
   let now = 1_000_000, state, cfg = { lang: 'en', privacy: { memoryEnabled: true } }, free = true;
   let calls = [], notifications = [], observed = 0, recalls = 0, count = 0;
@@ -27,6 +29,9 @@ test('waits 5–15 minutes, reserves each opportunity durably and has no restart
   assert.equal(f.engine.status().nextAt, 1_300_000);
   assert.equal(await f.engine.run(), false); assert.equal(f.calls.length, 0);
   f.advance(); assert.equal(await f.engine.run(), true);
+  assert.ok(f.calls[0].messages[0].content.includes(CHARACTER_VOICE),
+    'Spontaneous conversation must receive the same character voice as foreground chat.');
+  assert.equal(registry().personality, PERSONALITY_SUMMARY);
   assert.equal(await f.engine.run(), false); assert.equal(f.calls.length, 1);
   const due = f.state.nextAt; f.restart(); assert.equal(f.engine.status().nextAt, due);
   f.advance(60 * 60_000); f.restart();
