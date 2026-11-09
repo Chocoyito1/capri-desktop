@@ -1,0 +1,127 @@
+{
+  "atlasColumns": 4,
+  "sources": [
+    {
+      "id": "curious",
+      "path": "source.png",
+      "columns": 4,
+      "rows": 2
+    },
+    {
+      "id": "breathe",
+      "path": "idle-source.png",
+      "columns": 4,
+      "rows": 3
+    }
+  ],
+  "clips": {
+    "rest": {
+      "loop": true,
+      "stillFrame": "curious:0",
+      "entryPose": "stand-neutral",
+      "exitPose": "stand-neutral",
+      "exposures": [
+        [
+          "curious:0",
+          1200
+        ],
+        [
+          "breathe:0",
+          160
+        ],
+        [
+          "breathe:1",
+          160
+        ],
+        [
+          "breathe:2",
+          180
+        ],
+        [
+          "breathe:3",
+          200
+        ],
+        [
+          "breathe:4",
+          180
+        ],
+        [
+          "breathe:5",
+          80
+        ],
+        [
+          "breathe:6",
+          120
+        ],
+        [
+          "breathe:7",
+          80
+        ],
+        [
+          "breathe:8",
+          180
+        ],
+        [
+          "breathe:9",
+          180
+        ],
+        [
+          "breathe:10",
+          180
+        ],
+        [
+          "breathe:11",
+          160
+        ],
+        [
+          "curious:0",
+          1000
+        ]
+      ]
+    },
+    "curious": {
+      "loop": false,
+      "stillFrame": "curious:0",
+      "entryPose": "stand-neutral",
+      "exitPose": "stand-neutral",
+      "exposures": [
+        [
+          "curious:0",
+          250
+        ],
+        [
+          "curious:1",
+          160
+        ],
+        [
+          "curious:2",
+          160
+        ],
+        [
+          "curious:3",
+          350
+        ],
+        [
+          "curious:4",
+          350
+        ],
+        [
+          "curious:5",
+          160
+        ],
+        [
+          "curious:6",
+          160
+        ],
+        [
+          "curious:7",
+          160
+        ],
+        [
+          "curious:0",
+          170
+        ]
+      ]
+    }
+  }
+}

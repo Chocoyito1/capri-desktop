@@ -23,6 +23,7 @@ app.whenReady().then(async () => {
       import { Capri } from '${url('src/renderer/js/capri.js')}';
       import { SpriteRenderer } from '${url('src/renderer/js/sprite.js')}';
       import { Player, NEUTRAL } from '${url('src/renderer/js/acting.js')}';
+      import { Companion } from '${url('src/renderer/js/companion.js')}';
       try {
         const image = new Image(); image.src = '${url('assets/capri/capri-full.png')}'; await image.decode();
         const animateRAF = window.requestAnimationFrame.bind(window);
@@ -37,6 +38,31 @@ app.whenReady().then(async () => {
         pet.endAct(false); pet.nextAction=0; pet.reactToTool('Read'); check(!pet.act,'alert priority');
         pet.setMode('idle'); pet.setChatThinking(true); check(pet.base.name === 'focus','chat focus');
         pet.setChatThinking(false); check(pet.base.name === 'stand','chat focus cleanup'); pet.endAct(false);
+        pet.setMode('idle');pet.pos.y=pet.floor;
+        check(pet.beginRest(true),'begin floor rest');
+        check(pet.act.player.name==='sitDown','sit-down drawing sequence');
+        pet.drawFrame(pet.act.player.start+1200);
+        check(pet.groundRest?.phase==='seated' && pet.p.sit===1 && pet.base.name==='floorSit','settled floor sit');
+        const seatedY=pet.head().y;
+        for(const floor of [true,false]) {
+          if(!floor) {pet.endAct(false);pet.setStance('sit',{perch:{id:1,dx:100}});}
+          for(const name of ['listen','think','talk']) {
+            pet.perform(name);const start=pet.act.player.start,total=pet.act.player.total*1000/12;
+            for(let elapsed=180;elapsed<total+220;elapsed+=32) {
+              pet.drawFrame(start+elapsed);
+              const base=pet.base.resolve(pet.base.sample(start+elapsed).pose,pet.facing);
+              check(pet.p.sit===1 && Math.abs(pet.p.kickL-base.kickL)<.0001 && Math.abs(pet.p.kickR-base.kickR)<.0001,
+                name+' preserves '+(floor?'floor':'window')+' legs');
+              check(pet.sprite.gl.getError()===pet.sprite.gl.NO_ERROR,'seated chat WebGL');
+            }
+          }
+        }
+        pet.setStance('stand');pet.beginRest(true);pet.drawFrame(pet.act.player.start+1200);
+        pet.behave(pet.groundRest.until+1);
+        check(pet.act.player.name==='standUp','automatic stand-up');
+        pet.drawFrame(pet.act.player.start+1200);
+        check(!pet.groundRest && pet.p.sit===0 && pet.head().y<seatedY-50,'standing restores geometry');
+        pet.nextSit=Infinity;
         pet.nextIdle=0; pet.nextMove=pet.nextGaze=pet.nextTwitch=pet.nextShed=Infinity;
         pet.behave(performance.now()); const idle=pet.act.player.name; check(idle.startsWith('idle'),'idle scheduler');
         pet.endAct(false); pet.nextIdle=0; pet.behave(performance.now()); check(pet.act.player.name!==idle,'idle repeat');
@@ -60,23 +86,38 @@ app.whenReady().then(async () => {
         check(spriteGL.getUniform(program,spriteGL.getUniformLocation(program,'uAlpha'))===.5 && pet.p.alpha===1,
           'fullscreen opacity composes without changing the underlying sprite');
         pet.fullscreenProgress=0;pet.drawFrame();
-        for(const name of ['stand','idleSway','idlePreen','idleStretch','listen','think','read','search','type','gameReady','drag','fall','dropLand','dropPlop']) {
+        pet.endAct(false);pet.setMode('idle');
+        pet.companion=new Companion({capri:pet,host:{},storage:localStorage});
+        pet.companion.configure({dailyRoutine:false,surpriseAnimations:false});
+        pet.perform('idleBounce');
+        check(pet.interval()<17,'smooth gestures render at display cadence');
+        pet.drawFrame(pet.act.player.start+160);const firstArm=pet.p.armL;
+        pet.drawFrame(pet.act.player.start+176);
+        check(pet.p.armL!==firstArm && Math.abs(pet.p.armL-firstArm)<.1,'actual rig interpolates between drawing frames');
+        pet.endAct(false);
+        for(const name of ['stand','sitDown','floorSit','standUp','idleWave','idleSway','idlePreen','idleStretch','idleBreathe','idleListen','idleYawn','idleBounce','listen','think','read','search','type','gameReady','drag','fall','dropLand','dropPlop']) {
           const cell=document.createElement('section'); cell.textContent=name;
           const c=document.createElement('canvas');cell.append(c);document.querySelector('main').append(cell);
           const renderer=new SpriteRenderer(c,image); renderer.resize(.46);
           const player=new Player(name,{at:0,dir:1});
-          let frames=0;for(const key of player.act.keys){renderer.draw({...pet.p,...NEUTRAL,...player.resolve(key[1],1),sit:0});frames++}
+          let frames=0;for(const key of player.act.keys){renderer.draw({...pet.p,...NEUTRAL,...player.resolve(key[1],1),sit:key[1].seat||0});frames++}
           const drawing=player.sample(player.total*.45*1000/(player.act.fps||12));
           const pose={...NEUTRAL,...player.resolve(drawing.pose,1)};
-          renderer.draw({...pet.p,...pose,sit:0,alpha:1});
+          renderer.draw({...pet.p,...pose,sit:pose.seat||0,alpha:1});
           c.style.transform='translateY('+pose.bob+'px) rotate('+pose.tilt+'deg)';
           check(renderer.gl.getError()===renderer.gl.NO_ERROR,name+' WebGL');
+          // Keep the gallery as snapshots, so extra poses cannot evict the pet's
+          // live WebGL context before the interaction checks run.
+          const snapshot=new Image();snapshot.src=c.toDataURL();await snapshot.decode();
+          snapshot.style.cssText=c.style.cssText;snapshot.style.display='block';snapshot.style.margin='0 auto';
+          c.replaceWith(snapshot);
+          renderer.gl.getExtension('WEBGL_lose_context')?.loseContext();
         }
         window.result={ok:true,checks:'priority, cooldown, idle rotation, chat cleanup, ledge anchoring, gaming and every new drawing'};
       } catch(error) { window.result={ok:false,error:error.stack}; }
     </script>`;
     const page = path.join(output, 'preview.html'); fs.writeFileSync(page, html);
-    const win = new BrowserWindow({ show: false, width: 1130, height: 1140, webPreferences: { backgroundThrottling: false } });
+    const win = new BrowserWindow({ show: false, width: 1130, height: 1490, webPreferences: { backgroundThrottling: false } });
     await win.loadFile(page);
     let result;
     for (let i=0;i<100;i++) {

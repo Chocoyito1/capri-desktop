@@ -1,5 +1,5 @@
 // Pose-to-pose acting, timed the way cel animation is: an act is an exposure sheet,
-// a list of drawings, each held for a number of frames. Nothing is tweened. A move is
+// a list of drawings, each held for a number of frames. Quiet sheets interpolate; action beats keep their timing. A move is
 // a couple of key drawings, an anticipation the other way, sometimes a smear frame, and holds.
 //
 // Pose fields (anything left out falls back to the stance underneath):
@@ -28,50 +28,122 @@ export function actionForTool(tool = '') {
 
 const rep = (n, keys) => Array.from({ length: n }, () => keys).flat();
 
+// Fold the existing legs instead of replacing any of Capri's original artwork.
+const seated = (seat, pose = {}) => ({ seat, bob: 0, head: 0, hair: 0, mane: 0,
+  armL: -0.36 * seat, armR: -0.36 * seat, kickL: 1.1 * seat, kickR: 1.1 * seat, ...pose });
+
 export const NEUTRAL = {
   head: 0, mane: 0, hair: 0, tilt: 0, bob: 0, sx: 1, sy: 1, armL: 0, armR: 0, longL: 1, longR: 1,
   smear: [0, 0], echo: [0, 0], kickL: 0, kickR: 0,
 };
 
-// Continuous motion for mouse handling, while the other exposure sheets stay held.
+// Continuous rig motion; texture, palette, ink cadence and dramatic exposure sheets stay intact.
 export function blendPoses(from, to, amount) {
   const expand = pose => ({ ...NEUTRAL, ...pose,
     ...(pose.arms === undefined ? {} : { armL: pose.arms, armR: pose.arms }) });
   const a = expand(from), b = expand(to);
   const t = Math.max(0, Math.min(1, amount));
-  return Object.fromEntries(Object.keys(NEUTRAL).map(key => [key, Array.isArray(a[key])
+  const keys = [...Object.keys(NEUTRAL), ...['seat', 'reach', 'long'].filter(key => key in from || key in to)];
+  for (const key of ['seat', 'reach', 'long']) { a[key] ??= key === 'long' ? 1 : 0; b[key] ??= key === 'long' ? 1 : 0; }
+  return Object.fromEntries(keys.map(key => [key, Array.isArray(a[key])
     ? a[key].map((value, i) => value + (b[key][i] - value) * t)
     : a[key] + (b[key] - a[key]) * t]));
 }
 
 export const ACTS = {
+  // Extra exposure sheets deform the original cut-out; no replacement artwork.
+  idleBreathe: {
+    smooth: true, charm: true, priority: 0,
+    keys: [[3, {}], [3, {bob: 1, sx: 1.012, sy: 0.988, head: -0.025, arms: 0.04}],
+      [6, {bob: -3, sx: 0.993, sy: 1.018, mane: 0.05, arms: -0.06}],
+      [4, {bob: -2, hair: 2.5, head: 0.035, mane: 0.035}],
+      [4, {bob: 0.5, sx: 1.006, sy: 0.994, arms: 0.04}], [4, {}]],
+  },
+
+  idleListen: {
+    smooth: true, charm: true, priority: 0, directional: true,
+    keys: [[2, {}], [2, {head: -0.05, bob: 1, sx: 1.01, sy: 0.99}],
+      [3, {head: 0.19, tilt: 2, bob: -3, mane: 0.1, sx: 0.99, sy: 1.015}],
+      [5, {head: 0.13, tilt: 1.2, bob: -1.5, hair: 3, armR: 0.1}],
+      [3, {head: 0.16, tilt: 1.5, bob: -2, hair: 1}],
+      [3, {head: 0.06, bob: 0.5, mane: -0.025}], [3, {}]],
+  },
+
+  idleYawn: {
+    smooth: true, charm: true, priority: 0,
+    keys: [[3, {}], [4, {head: -0.08, mane: -0.08, bob: 1, sy: 0.985, sx: 1.012}],
+      [5, {head: -0.16, arms: 0.25, sy: 1.03, sx: 0.985, bob: -3}],
+      [6, {head: -0.12, armL: 0.28, armR: 0.18, hair: 3, mane: 0.04, bob: -2}],
+      [3, {head: 0.09, arms: -0.08, mane: -0.1, sy: 0.98, sx: 1.015, bob: 1}],
+      [3, {head: -0.025, arms: 0.025, hair: -1, bob: -1}], [4, {}]],
+  },
+
+  idleBounce: {
+    smooth: true, charm: true, priority: 0,
+    // A large buoyant beat, then a smaller echo: compression -> lift -> settle.
+    keys: [[2, {}], [2, {sy: 0.945, sx: 1.035, bob: 2, head: -0.08, arms: 0.08, mane: -0.08}],
+      [2, {sy: 1.035, sx: 0.98, bob: -6, head: -0.02, arms: -0.1, hair: -3}],
+      [3, {sy: 1.012, sx: 0.994, bob: -9, head: 0.09, arms: 0.3, hair: 3, mane: 0.1}],
+      [2, {sy: 0.965, sx: 1.025, bob: 1.5, head: 0.05, arms: 0.16, hair: 4}],
+      [2, {sy: 1.022, sx: 0.988, bob: -4, head: -0.03, arms: 0.2, hair: -1}],
+      [3, {bob: -5.5, head: -0.07, armL: 0.23, armR: 0.32, mane: 0.06}],
+      [2, {sy: 0.985, sx: 1.012, bob: 0.5, arms: 0.06, hair: 2}],
+      [3, {bob: -1.5, head: 0.025, hair: -1}], [4, {}]],
+  },
+
+  sitDown: {
+    smooth: true,
+    priority: 2,
+    keys: [[2, seated(0, {head: -0.04})], [2, seated(0.15, {arms: 0.08})],
+      [2, seated(0.45, {head: 0.06})], [2, seated(0.8, {head: 0.08})],
+      [3, seated(1, {head: 0.04})], [2, seated(1)]],
+  },
+  floorSit: {
+    smooth: true,
+    loop: true,
+    keys: [[12, seated(1, {head: 0.05, hair: -1.5})],
+      [8, seated(1, {head: 0.09, hair: 0, kickL: 1.16})],
+      [12, seated(1, {head: 0.04, hair: 1.5})],
+      [8, seated(1, {head: -0.04, kickR: 1.16})],
+      [10, seated(1, {head: -0.06, armL: -0.3})], [10, seated(1)]],
+  },
+  standUp: {
+    smooth: true,
+    priority: 2,
+    keys: [[2, seated(1, {head: -0.05})], [2, seated(0.8, {head: -0.08, arms: -0.45})],
+      [2, seated(0.5, {head: -0.04, arms: -0.18})], [2, seated(0.2, {arms: 0.06})],
+      [3, seated(0, {head: 0.04})], [2, seated(0)]],
+  },
   // ---- stances (looping) ----
 
-  // floating: four drawings; the arms lag behind the body (down when she rises, up when she sinks)
+  // Floating: unequal buoyant beats with delayed arms and mane follow-through.
   stand: {
-    loop: true,
-    keys: [
-      [6, { bob: 0, hair: -2.5, arms: 0.04 }],
-      [4, { bob: -2, hair: 0, arms: 0 }],
-      [6, { bob: -4, hair: 2.5, arms: -0.05 }],
-      [4, { bob: -2, hair: 0, arms: 0 }],
-    ],
+    smooth: true, loop: true,
+    // Two unequal float beats. Arms trail the lift; the mane catches up later.
+    keys: [[3, {bob: 0, sx: 1.01, sy: 0.988, hair: -2.5, arms: 0.065, head: -0.02, tilt: -0.5}],
+      [3, {bob: -2, sx: 0.994, sy: 1.014, hair: -3.5, arms: -0.06, head: -0.035, tilt: -0.2}],
+      [4, {bob: -6, sx: 0.992, sy: 1.018, hair: -1, arms: -0.09, head: 0.02, tilt: 0.45}],
+      [3, {bob: -7, hair: 2.5, armL: -0.03, armR: 0.01, head: 0.045, tilt: 0.6}],
+      [4, {bob: -4, sx: 1.004, sy: 0.997, hair: 4, arms: 0.05, head: 0.03, tilt: 0.35}],
+      [3, {bob: -1, sx: 1.012, sy: 0.986, hair: 1.5, arms: 0.085, tilt: -0.1}],
+      [3, {bob: 0.7, sx: 1.008, sy: 0.993, hair: -1.5, arms: 0.05, head: -0.025, tilt: -0.4}],
+      [4, {bob: -3.5, sx: 0.995, sy: 1.011, hair: -2.5, arms: -0.06, head: -0.01, tilt: -0.25}],
+      [3, {bob: -5, hair: 1, armL: -0.025, armR: 0.025, head: 0.03, tilt: 0.2}],
+      [4, {bob: -2, sx: 1.004, sy: 0.995, hair: 2.5, arms: 0.04, tilt: 0.1}]],
   },
 
-  // Quiet focus: the same cut-out and held drawings, with a small head dip and
-  // slower arm/hair follow-through. No new texture, shader pass or effect emitter.
   focus: {
-    loop: true,
-    keys: [
-      [10, { bob: 0, head: 0.04, hair: -1.5, arms: 0.02 }],
-      [8, { bob: -2, head: 0.09, hair: 0, arms: 0.05 }],
-      [10, { bob: -3, head: 0.12, hair: 1.5, arms: 0.03 }],
-      [8, { bob: -2, head: 0.07, hair: 0, arms: 0.01 }],
-    ],
+    smooth: true, loop: true,
+    // Work keeps a quieter buoyancy than the playful idle.
+    keys: [[6, {bob: 0, head: 0.035, hair: -1.5, arms: 0.025}],
+      [5, {bob: -1.5, head: 0.08, hair: -2, arms: -0.025, sy: 1.006, sx: 0.997}],
+      [5, {bob: -2.5, head: 0.11, hair: 1.5, armL: 0.03, armR: 0.06}],
+      [5, {bob: -1, head: 0.075, hair: 2, arms: 0.06, sy: 0.997, sx: 1.003}],
+      [4, {bob: 0.3, head: 0.045, hair: -0.5, arms: 0.035}]],
   },
 
-  // perched on a window, hands down on the ledge, legs kicking one after the other
   sit: {
+    smooth: true,
     loop: true,
     keys: [
       [5, { kickL: 0.24, kickR: -0.03, hair: -1.5, arms: -0.42 }],
@@ -113,46 +185,84 @@ export const ACTS = {
   // ---- one-shot acts ----
 
   // Quiet idle drawings: no effects, no new artwork, and a rest drawing at both ends.
+  idleWave: {
+    smooth: true, charm: true, priority: 0,
+    keys: [[2, {}], [2, {bob: 1.5, head: -0.05, armR: -0.1, sx: 1.02, sy: 0.98, mane: -0.04}],
+      [2, {bob: -4, head: 0.05, armR: 0.65, tilt: -1, sx: 0.987, sy: 1.02, hair: -2}],
+      [3, {bob: -5, head: 0.1, armR: 1.55, armL: 0.05, tilt: -1.5, hair: 3, mane: 0.08}],
+      [2, {bob: -3, head: 0.12, armR: 1.96, tilt: -1.1, hair: 2}],
+      [3, {bob: -2, head: 0.08, armR: 1.5, tilt: -0.6, hair: -1}],
+      [2, {bob: -3.5, head: 0.11, armR: 1.88, tilt: -1.1, hair: 2}],
+      [3, {bob: -1.5, head: 0.065, armR: 1.53, tilt: -0.5}],
+      [2, {bob: -2.5, head: 0.09, armR: 1.8, tilt: -0.8, hair: 1}],
+      [3, {bob: 0.8, head: 0.025, armR: 0.75, sx: 1.012, sy: 0.988, hair: 2}],
+      [2, {bob: -1, head: -0.02, armR: 0.18, hair: -1}], [4, {}]],
+  },
+
   idleSway: {
-    priority: 0,
-    keys: [[3, {}], [8, { head: -0.06, hair: -3, tilt: -1, armL: -0.08 }],
-      [3, { hair: 0 }], [8, { head: 0.06, hair: 3, tilt: 1, armR: -0.08 }], [4, {}]],
+    smooth: true, charm: true, priority: 0,
+    keys: [[3, {}], [3, {bob: 1, head: 0.03, sx: 1.012, sy: 0.99}],
+      [5, {bob: -3.5, head: -0.09, hair: -4, tilt: -1.8, armL: -0.1, armR: 0.06, sx: 0.992, sy: 1.014}],
+      [3, {bob: -2, head: -0.05, hair: -1, tilt: -1.2, armL: -0.04}],
+      [3, {bob: 0.8, head: 0.02, hair: 2, sx: 1.01, sy: 0.99}],
+      [5, {bob: -3, head: 0.09, hair: 4, tilt: 1.8, armR: -0.1, armL: 0.06, sx: 0.994, sy: 1.012}],
+      [3, {bob: -1, head: 0.04, hair: 1, tilt: 0.8}], [4, {}]],
   },
+
   idlePreen: {
-    priority: 0,
-    keys: [[3, {}], [2, { head: -0.04, armL: 0.25 }],
-      [7, { head: -0.1, armL: 0.72, mane: 0.08 }],
-      [4, { head: -0.08, armL: 0.64, hair: 2 }], [3, { armL: 0.2 }], [4, {}]],
+    smooth: true, charm: true, priority: 0,
+    keys: [[2, {}], [2, {bob: 1, head: 0.04, armL: -0.08, mane: -0.04, sx: 1.012, sy: 0.988}],
+      [3, {bob: -2.5, head: -0.12, armL: 0.8, tilt: -1, hair: -2, sx: 0.994, sy: 1.012}],
+      [4, {bob: -1.5, head: -0.08, armL: 0.66, mane: 0.09, hair: 3}],
+      [3, {bob: -2, head: -0.11, armL: 0.76, mane: 0.06, hair: 1}],
+      [3, {bob: 0.5, head: 0.025, armL: 0.22, hair: 2, sx: 1.006, sy: 0.994}],
+      [3, {bob: -0.7, head: -0.015, armL: -0.025, hair: -1}], [4, {}]],
   },
+
   idleStretch: {
-    priority: 0,
-    keys: [[3, {}], [3, { head: 0.04, arms: -0.14, mane: -0.05 }],
-      [4, { arms: 0.25, head: -0.04 }], [9, { arms: 0.5, head: -0.08, mane: 0.1 }],
-      [3, { arms: 0.2 }], [4, {}]],
+    smooth: true, charm: true, priority: 0,
+    keys: [[2, {}], [3, {head: 0.05, arms: -0.2, mane: -0.08, bob: 1.5, sx: 1.02, sy: 0.98}],
+      [4, {head: -0.06, arms: 0.3, bob: -3, hair: -2, sx: 0.988, sy: 1.025}],
+      [5, {head: -0.09, armL: 0.55, armR: 0.47, mane: 0.12, bob: -4, hair: 3, sx: 0.99, sy: 1.02}],
+      [4, {head: -0.04, arms: 0.48, mane: 0.08, bob: -2.5, tilt: 0.7}],
+      [3, {head: 0.065, arms: 0.1, bob: 1, hair: 2, sx: 1.016, sy: 0.984}],
+      [3, {head: -0.02, arms: -0.04, bob: -1, hair: -1}], [4, {}]],
   },
+
   listen: {
-    priority: 1, directional: true,
-    keys: [[2, {}], [2, { head: -0.03 }], [9, { head: 0.14, mane: 0.06 }],
-      [5, { head: 0.1 }], [3, {}]],
+    smooth: true, charm: true, priority: 1, directional: true,
+    keys: [[2, {}], [2, {head: -0.05, bob: 1, mane: -0.025, sx: 1.008, sy: 0.992}],
+      [3, {head: 0.18, tilt: 1.5, bob: -2.5, mane: 0.1, sx: 0.993, sy: 1.012}],
+      [5, {head: 0.13, tilt: 0.8, bob: -1, hair: 2.5, armR: 0.08}],
+      [3, {head: 0.15, tilt: 1, bob: -1.5, hair: 1}],
+      [3, {head: 0.06, bob: 0.4, mane: -0.02}], [3, {}]],
   },
+
   think: {
-    priority: 1,
-    keys: [[3, {}], [3, { head: -0.06, armL: 0.28 }],
-      [10, { head: -0.12, armL: 0.65, mane: 0.05 }],
-      [5, { head: -0.08, armL: 0.58 }], [3, { armL: 0.2 }], [3, {}]],
+    smooth: true, charm: true, priority: 1,
+    keys: [[2, {}], [2, {head: 0.04, armL: -0.06, bob: 0.7}],
+      [3, {head: -0.14, armL: 0.72, bob: -2, hair: -1.5, tilt: -0.7}],
+      [6, {head: -0.1, armL: 0.62, bob: -1, hair: 2, mane: 0.06}],
+      [3, {head: -0.15, armL: 0.68, bob: -1.5, hair: 0.5}],
+      [3, {head: -0.08, armL: 0.56, bob: -0.5}],
+      [3, {head: 0.025, armL: 0.16, bob: 0.4, hair: 1}], [3, {}]],
   },
+
   read: {
+    smooth: true,
     priority: 1,
     keys: [[2, {}], [6, { head: 0.08, armL: 0.12, armR: 0.12 }],
       [6, { head: -0.02, armL: 0.12, armR: 0.12 }],
       [5, { head: 0.06, arms: 0.1 }], [3, {}]],
   },
   search: {
+    smooth: true,
     priority: 1,
     keys: [[2, {}], [7, { head: -0.14, hair: -2 }], [2, { head: -0.04 }],
       [7, { head: 0.14, hair: 2 }], [3, {}]],
   },
   type: {
+    smooth: true,
     priority: 1,
     keys: [[2, {}], [3, { head: 0.07, arms: 0.18 }],
       ...rep(3, [[2, { head: 0.08, armL: 0.28, armR: 0.14 }],
@@ -168,9 +278,17 @@ export const ACTS = {
   },
 
   // little nods while the words come out, two drawings on threes
-  talk: { priority: 0, keys: rep(2, [[3, { head: 0.04, mane: 0.08 }], [3, { head: 0, mane: 0.03 }]]) },
+  talk: {
+    smooth: true, charm: true, priority: 0,
+    // Unequal nods and one restrained hand accent, rather than metronomic nodding.
+    keys: [[2, {}], [2, {head: -0.035, bob: 0.6, mane: -0.025}],
+      [2, {head: 0.09, bob: -1.5, mane: 0.09, armR: 0.12, hair: -1}],
+      [3, {head: 0.035, bob: -0.5, mane: 0.04, armR: 0.06, hair: 1.5}],
+      [2, {head: -0.02, bob: 0.3}],
+      [2, {head: 0.065, bob: -1, mane: 0.065, armL: 0.06}],
+      [3, {head: 0.02, mane: 0.025, hair: 0.5}], [3, {}]],
+  },
 
-  // the cocked head: anticipation the other way, a smear, then a long hold
   curious: {
     priority: 1,
     directional: true,
@@ -553,6 +671,10 @@ export class Player {
     this.reach = reach;
     this.start = at;
     this.total = this.act.keys.reduce((n, [hold]) => n + hold, 0);
+    // Smooth acts only override channels authored by their sheet. Expanding a
+    // head gesture to a full neutral pose would straighten seated legs.
+    this.channels = new Set(this.act.keys.flatMap(([, pose]) => Object.keys(pose)
+      .flatMap(key => key === 'arms' ? ['armL', 'armR'] : [key])));
   }
 
   get priority() {
@@ -560,7 +682,7 @@ export class Player {
   }
 
   // The drawing on screen at `now` ({ pose, index, cue }), or null once a one-shot act is over.
-  sample(now) {
+  sample(now, still = false) {
     const fps = this.act.fps || SHEET_FPS;
     let f = Math.max(0, (now - this.start) / (1000 / fps));
     if (!this.act.smooth) f = Math.floor(f);
@@ -568,6 +690,7 @@ export class Player {
       if (!this.act.loop) return null;
       f %= this.total;
     }
+    if (still) f = 0;
     const { keys } = this.act;
     for (let i = 0; i < keys.length; i++) {
       const [hold, pose, cue] = keys[i];
@@ -575,7 +698,8 @@ export class Player {
         if (!this.act.smooth) return { pose, index: i, cue };
         const next = keys[i + 1] || (this.act.loop ? keys[0] : keys[i]);
         const t = f / hold;
-        return { pose: blendPoses(pose, next[1], t * t * (3 - 2 * t)), index: i, cue };
+        const blended = blendPoses(pose, next[1], t * t * (3 - 2 * t));
+        return { pose: Object.fromEntries(Object.entries(blended).filter(([key]) => this.channels.has(key))), index: i, cue };
       }
       f -= hold;
     }

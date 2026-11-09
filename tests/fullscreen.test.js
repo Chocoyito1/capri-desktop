@@ -19,12 +19,45 @@ test('fullscreen matches full monitor bounds, not maximized work area, other mon
 test('geometry watcher emits changed fullscreen states immediately and survives transient failures',()=>{
   const display={x:0,y:0,width:1280,height:720},events=[];
   let row=null,fail=false;
-  const watch=startFullscreenWatch({read:()=>{if(fail)throw Error('temporary');return row;},display:()=>display,onChange:value=>events.push(value),interval:10000});
+  const watch=startFullscreenWatch({read:()=>{if(fail)throw Error('temporary');return row;},display:()=>display,onChange:value=>events.push(value),interval:10000,enterDelay:0});
   try{
     row={...display,pid:0,caption:false};watch.tick();watch.tick();
     fail=true;watch.tick();fail=false;row=null;watch.tick();
     assert.deepEqual(events,[false,true,false]);
   }finally{watch.stop();}
+});
+
+test('closing an overlay ignores brief fullscreen-shaped activation windows',()=>{
+  const display={x:0,y:0,width:1280,height:720},events=[];
+  let clock=0,row=null;
+  const watch=startFullscreenWatch({read:()=>row,display:()=>display,onChange:value=>events.push(value),
+    now:()=>clock,ownPid:456,interval:10000});
+  try {
+    row={...display,pid:456,caption:false};clock=100;watch.tick(); // focused chat
+    row={...display,pid:123,caption:false};clock=110;watch.tick(); // transient on blur
+    row={...display,pid:123,caption:true};clock=160;watch.tick(); // real normal window
+    assert.deepEqual(events,[false],'Closing chat must not flash a fullscreen teleport');
+    row={...display,pid:123,caption:false};clock=200;watch.tick();
+    clock=349;watch.tick();assert.deepEqual(events,[false]);
+    clock=350;watch.tick();assert.deepEqual(events,[false,true],'Sustained real fullscreen still hides Capri');
+    row=null;watch.tick();assert.deepEqual(events,[false,true,false],'Return remains immediate');
+  } finally {watch.stop();}
+});
+
+test('overlay focus does not invent fullscreen exits and reentries',()=>{
+  const display={x:0,y:0,width:1280,height:720},events=[];
+  let clock=0,row={...display,pid:123,caption:false};
+  const watch=startFullscreenWatch({read:()=>row,display:()=>display,onChange:value=>events.push(value),
+    now:()=>clock,ownPid:456,interval:10000});
+  try {
+    clock=150;watch.tick();assert.deepEqual(events,[true]);
+    for(let i=0;i<3;i++) {
+      row={...display,pid:456,caption:false};clock+=200;watch.tick();
+      row={...display,pid:123,caption:false};clock+=200;watch.tick();
+    }
+    assert.deepEqual(events,[true],'Focus round trips cannot animate another departure');
+    row={...display,pid:123,caption:true};watch.tick();assert.deepEqual(events,[true,false]);
+  } finally {watch.stop();}
 });
 
 async function fixture(reduce=false){
@@ -78,4 +111,22 @@ test('completed fullscreen disappearance and reduced-motion reversal both settle
     assert.equal(f.capri.fullscreenProgress,0);assert.equal(f.capri.root.dataset.fullscreen,'visible');
     assert.equal(f.frames.size,0);
   }
+});
+
+test('fullscreen changes while gaming stay silent, then restore effects after resuming',async()=>{
+  const f=await fixture(),sounds=[],effects=[];
+  f.capri.voice.play=name=>sounds.push(name);
+  f.capri.fx.beam=()=>effects.push('beam');
+  f.capri.fx.burst=()=>effects.push('burst');
+  f.capri.gaming=true;
+  for(let revision=1;revision<=6;revision++) {
+    f.send({active:revision%2===1,revision});f.step(revision*200);
+  }
+  assert.deepEqual(sounds,[]);assert.deepEqual(effects,[]);
+  assert.equal(f.capri.fullscreen,false);
+  f.capri.gaming=false;
+  f.send({active:true,revision:7});f.step(1500);
+  f.send({active:false,revision:8});f.step(1700);
+  assert.deepEqual(sounds,['teleport-out','teleport-in']);
+  assert.equal(f.capri.fullscreen,false);
 });

@@ -1,9 +1,10 @@
 export class MicrophoneCapture {
-  async start(onSamples){
+  async start(onSamples,onEnded=()=>{}){
     const epoch=(this.epoch||0)+1;this.epoch=epoch;
     const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
     if(this.epoch!==epoch){stream.getTracks().forEach(track=>track.stop());return;}
     this.stream=stream;
+    stream.getAudioTracks?.().forEach(track=>track.addEventListener('ended',()=>{if(this.epoch===epoch)onEnded();}));
     try{
       const context=new AudioContext({sampleRate:16000});this.context=context;
       if(context.sampleRate!==16000)throw Error('microphone-unavailable');

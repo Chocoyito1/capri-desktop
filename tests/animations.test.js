@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const moduleSource = fs.readFileSync(path.join(__dirname, '../src/renderer/js/acting.js'));
 const load = () => import(`data:text/javascript;base64,${moduleSource.toString('base64')}`);
-const additions = ['idleSway', 'idlePreen', 'idleStretch', 'listen', 'think', 'read', 'search', 'type', 'gameReady'];
+const additions = ['idleWave', 'idleSway', 'idlePreen', 'idleStretch', 'listen', 'think', 'read', 'search', 'type', 'gameReady'];
 
 test('new acting sheets finish, hold finite poses and stay silent in both directions', async () => {
   const { ACTS, NEUTRAL, Player } = await load();
@@ -20,9 +20,9 @@ test('new acting sheets finish, hold finite poses and stay silent in both direct
         assert.equal(drawing.cue, undefined, 'No flashes or sounds during quiet reactions');
         const pose = { ...NEUTRAL, ...player.resolve(drawing.pose, facing) };
         for (const value of Object.values(pose).flat()) assert.ok(Number.isFinite(value));
-        assert.equal(pose.sx, 1, 'New quiet acts preserve body proportions');
-        assert.equal(pose.sy, 1);
-        assert.ok(Math.abs(pose.bob) <= 3, 'Acts must also work on a window ledge');
+        assert.ok(pose.sx >= 0.97 && pose.sx <= 1.035, 'Quiet squash remains restrained');
+        assert.ok(pose.sy >= 0.97 && pose.sy <= 1.035, 'Quiet stretch preserves the silhouette');
+        assert.ok(Math.abs(pose.bob) <= 6, 'Quiet standing reactions stay small');
       }
       assert.equal(player.sample((player.total + 1) * frameMs), null);
     }
@@ -60,4 +60,30 @@ test('drag and fall interpolate continuously through frame and loop boundaries',
     const player = new Player(name, {at: 0});
     assert.equal(player.sample(player.total * 1000 / player.act.fps + 1), null);
   }
+});
+
+
+test('playful original-art motion stays continuous, silent and within controlled squash/bounce limits', async () => {
+  const {Player,NEUTRAL} = await load();
+  for (const name of ['stand','focus','idleWave','idleSway','idlePreen','idleStretch',
+    'idleBreathe','idleListen','idleYawn','idleBounce','listen','think','talk']) {
+    const player=new Player(name,{at:0});
+    const duration=player.total*1000/(player.act.fps||12);
+    let previous=null;
+    for(let now=0;now<duration*(player.act.loop?2:1);now++) {
+      const sample=player.sample(now),pose={...NEUTRAL,...player.resolve(sample.pose,1)};
+      assert.equal(sample.cue,undefined,'Routine charm remains silent');
+      assert.ok(pose.sx>=.94&&pose.sx<=1.04&&pose.sy>=.94&&pose.sy<=1.04,'No excessive deformation');
+      assert.ok(Math.abs(pose.bob)<=10,'No large displacement during quiet desktop motion');
+      if(previous) for(const key of ['armL','armR','head','hair','bob','sx','sy','tilt'])
+        assert.ok(Math.abs(pose[key]-previous[key])<.15,`${name} ${key} discontinuity at ${now}ms`);
+      previous=pose;
+    }
+  }
+  const bounce=new Player('idleBounce',{at:0});let highest=0,lowest=0,minScale=1;
+  for(let now=0;now<bounce.total*1000/12;now++) {
+    const pose=bounce.sample(now).pose;
+    highest=Math.min(highest,pose.bob);lowest=Math.max(lowest,pose.bob);minScale=Math.min(minScale,pose.sy);
+  }
+  assert.ok(highest<=-8&&lowest>=1.5&&minScale<.96,'A visible anticipation, lift and compression remain');
 });

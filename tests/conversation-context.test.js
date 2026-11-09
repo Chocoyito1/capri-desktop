@@ -7,7 +7,7 @@ const { packConversation, validateMessages, cost } = require('../src/main/conver
 
 async function renderer() {
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/js/chat.js'), 'utf8')
-    .replace("import { pick, fmt } from './util.js';", 'const pick = items => items[0]; const fmt = text => text;');
+    .replace("import { welcomePicker } from './welcome.js';", "const welcomePicker=()=>()=>'Hey. What is on your mind?';").replace("import { pick, fmt } from './util.js';", 'const pick = items => items[0]; const fmt = text => text;');
   return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 }
 function controller(Chat, host = {}) {

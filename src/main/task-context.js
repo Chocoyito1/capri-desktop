@@ -14,6 +14,7 @@ class TaskContext {
     this.prune();
     const outcomes=results.slice(-4).map(result=>({type:result.type,
       ...(result.title?{title:String(result.title).slice(0,100)}:{}),
+      ...(result.browser?{browser:String(result.browser).slice(0,80)}:{}),
       ...(typeof result.launchRequested==='boolean'?{launchRequested:result.launchRequested}:{}),
       ...(typeof result.windowObserved==='boolean'?{windowObserved:result.windowObserved}:{}),
       ...(typeof result.playing==='boolean'?{playing:result.playing}:{}),

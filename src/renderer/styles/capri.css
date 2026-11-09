@@ -111,6 +111,16 @@ body {
   display: block;
 }
 
+/* Voice energy hugs the current drawing, including her mane and moving limbs.
+   Keep it on the canvas so facing, scale and posture carry the aura with her.
+   JS eases its envelope at display cadence, independently of her cel timing. */
+.capri__sprite.has-speech-aura {
+  filter:
+    drop-shadow(-2px 1px 1px rgb(178 111 255 / calc(var(--speech-aura) * .85)))
+    drop-shadow(2px -1px 3px rgb(49 255 150 / calc(var(--speech-aura) * .65)))
+    drop-shadow(0 0 calc(5px + var(--speech-aura) * 9px) rgb(131 58 235 / calc(var(--speech-aura) * .8)));
+}
+
 .fx {
   position: fixed;
   inset: 0;
@@ -599,7 +609,11 @@ body {
 .panel[data-kind='chat'] { --accent: var(--green); }
 
 .panel.is-chat {
-  width: clamp(320px, 24vw, 420px);
+  width: clamp(380px, 27vw, 460px);
+}
+
+.panel.is-chat .panel__plate {
+  padding-bottom: 22px;
 }
 
 /* your line up top like a prompt, her answer under it */
@@ -650,6 +664,7 @@ body {
 
 .panel__chat {
   display: flex;
+  align-items: flex-end;
   gap: 6px;
   margin: 12px 0 0;
 }
@@ -657,7 +672,18 @@ body {
 .panel__input {
   flex: 1;
   min-width: 0;
-  padding: 7px 10px 6px;
+  box-sizing: border-box;
+  height: 32px; /* one 18px line, vertical padding and the accent border */
+  max-height: 68px; /* grows to three lines, then scrolls */
+  line-height: 18px;
+  resize: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--violet) transparent;
+  padding: 7px 10px 5px;
   border: 0;
   border-bottom: 2px solid var(--accent);
   background: var(--ink-2);
@@ -859,4 +885,116 @@ body {
   .panel[data-kind='alert'] .panel__state {
     animation: none !important;
   }
+}
+
+/* Instant conversation launcher: violet ink, lime accents, two clear choices. */
+.talk-menu { position: fixed; z-index: 40; width: 236px; text-align: center; pointer-events: none; }
+.talk-menu[hidden] { display: none; }
+.talk-menu__hello { display: inline-block; max-width: 100%; margin: 0 0 14px; padding: 10px 14px;
+  color: #f4edf9; background: #140c20; border: 1px solid #7435dc; box-shadow: 3px 3px 0 #7435dc;
+  font: 600 15px/1.3 'Chakra Petch', sans-serif; clip-path: polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px); }
+.talk-menu__choices { display: flex; gap: 20px; justify-content: center; }
+.talk-menu button { display: grid; place-items: center; width: 56px; height: 56px; padding: 0;
+  border-radius: 50%; border: 2px solid #31ff72; color: #31ff72; background: #140c20;
+  box-shadow: 4px 4px 0 #7435dc; cursor: pointer; pointer-events: auto; transition: transform 100ms ease, background 100ms ease; }
+.talk-menu button:hover { background: #31ff72; color: #140c20; transform: translateY(-3px); }
+.talk-menu button:focus-visible { outline: 2px solid #f4edf9; outline-offset: 4px; }
+.talk-menu button:active { transform: translate(2px,2px); box-shadow: 2px 2px 0 #7435dc; }
+.panel.is-chat .panel__tag, .panel.is-chat .panel__state, .panel.is-chat .panel__activity { display: none; }
+@media (prefers-reduced-motion: reduce) { .talk-menu button { transition: none; } }
+
+/* A local microphone indicator; no ambient transcript is displayed or retained. */
+.wake-indicator { position: fixed; right: 14px; bottom: 12px; z-index: 35; padding: 6px 10px;
+  max-width: min(360px,90vw); color: #c9bdd9; background: #140c20; border: 1px solid #7435dc;
+  font: 400 10px/1.4 'JetBrains Mono', monospace; cursor: pointer; }
+.wake-indicator[hidden] { display: none; }
+.wake-indicator[data-listening='true'] { color: #31ff72; border-color: #31ff72; }
+.wake-indicator:focus-visible { outline: 2px solid #31ff72; outline-offset: 3px; }
+.voice-session .panel, .voice-session .ticker, .voice-session .talk-menu { visibility: hidden !important; pointer-events: none !important; }
+.voice-indicator { position:fixed; z-index:36; width:30px; height:30px; padding:6px; border-radius:50%;
+  transform:translate(-50%,-100%); color:#ae92dd; background:#170e24ed; border:1px solid #735494;
+  display:grid; place-items:center; cursor:pointer; box-shadow:0 2px 12px #0004; }
+.voice-indicator[hidden] { display:none; }
+.voice-indicator svg { width:16px; height:16px; }
+.voice-indicator[data-state='listening'] { color:#64e9ae; border-color:#64e9ae; }
+.voice-indicator[data-state='thinking'], .voice-indicator[data-state='starting'] { opacity:.65; }
+.voice-indicator[data-state='speaking'] { color:#ddc6ff; border-color:#b088e1; }
+.voice-indicator:focus-visible { outline:2px solid #64e9ae; outline-offset:3px; }
+
+/* Conversation surfaces follow the launcher's circles, with quieter violet ink. */
+.talk-menu__choices { gap: 16px; }
+.talk-menu button { width: 44px; height: 44px; border-width: 1px; box-shadow: 2px 3px 0 #7435dc; }
+.talk-menu button:hover { transform: translateY(-2px); }
+.talk-menu button:focus-visible { outline-width: 1px; }
+.talk-menu:focus { outline: none; }
+.talk-menu__hello { padding: 9px 13px; border-radius: 13px; clip-path: none; border-color: #7435dc80;
+  box-shadow: 2px 3px 0 #7435dc70; font-size: 14px; }
+.panel.is-chat { width: min(420px, calc(100vw - 28px)); filter: none; }
+.panel.is-chat .panel__plate { grid-template-columns: 36px minmax(0,1fr); gap: 12px; padding: 18px;
+  border: 1px solid #7435dc90; border-radius: 18px; clip-path: none; box-shadow: 3px 4px 0 #7435dc70; }
+.panel.is-chat .panel__tail { display: none; }
+.panel.is-chat .panel__face { width: 36px; height: 36px; border-radius: 50%; clip-path: none; margin-top: 1px; padding: 1px; }
+.panel.is-chat .panel__face canvas { border-radius: 50%; clip-path: none; }
+.panel.is-chat .panel__meta { margin: 0 28px 7px 0; font-size: 9px; letter-spacing: .11em; }
+.panel.is-chat .panel__who { color: var(--paper-3); }
+.panel.is-chat .panel__line { font-size: 15px; line-height: 1.45; font-weight: 600; }
+.panel.is-chat .panel__chat { gap: 8px; margin-top: 14px; align-items: center; }
+.panel.is-chat .panel__input { border: 1px solid #7435dc55; border-radius: 12px; clip-path: none;
+  background: #251b32; padding: 7px 10px 5px; font-size: 11px; }
+.panel.is-chat .panel__input:focus { border-color: #31ff7280; background: #2a2038; }
+.panel.is-chat .panel__chat .panel__action { display: grid; place-items: center; width: 34px; height: 34px;
+  min-width: 34px; padding: 0; border-radius: 50%; clip-path: none; border: 1px solid #7435dc60;
+  background: #251b32; color: var(--paper-2); }
+.panel.is-chat .panel__chat .panel__action[hidden] { display: none; }
+.panel.is-chat .panel__chat .panel__send { background: var(--green); color: var(--ink); border-color: transparent; }
+.panel.is-chat .panel__chat .panel__close { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px;
+  min-width: 26px; background: transparent; border: 0; color: var(--paper-3); }
+.panel.is-chat .panel__chat .panel__action:hover { border-color: #31ff7290; color: var(--green); }
+.panel.is-chat .panel__chat .panel__send:hover { color: var(--ink); background: #77ff9e; }
+.panel.is-chat .panel__chat .panel__action:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+.panel.is-chat .panel__chat .panel__action:disabled { opacity: .45; cursor: default; }
+.panel.is-chat .panel__dictation-status { color: var(--paper-3); font-size: 10px; line-height: 1.4; margin-top: 8px; }
+.panel.is-chat .panel__dictation-status.is-error { color: var(--red); }
+.panel.is-chat .panel__mic.is-listening { background: #183226; border-color: var(--green); color: var(--green); }
+.panel.is-chat .panel__mic.is-listening::after { left: 6px; bottom: 4px; max-width: calc(100% - 12px); border-radius: 3px; }
+
+/* Voice: one central microphone, transcript, a short status and an optional send. */
+.panel.is-voice { width: min(304px, calc(100vw - 28px)); }
+.panel.is-voice .panel__plate { display: block; padding: 18px 22px 16px; }
+.panel.is-voice .panel__face { position: absolute; left: 15px; top: 12px; width: 26px; height: 26px; }
+.panel.is-voice .panel__meta { justify-content: center; margin: 1px 20px 8px; }
+.panel.is-voice:not(.has-chat-turn) .panel__line, .panel.is-voice .panel__quote { display: none; }
+.panel.is-voice .panel__line { margin-top: 8px; text-align: center; max-height: 28vh; font-size: 14px; }
+.panel.is-voice .panel__chat { display: grid; grid-template-columns: 1fr 34px 34px 1fr; gap: 10px; margin-top: 14px; }
+.panel.is-voice .panel__chat .panel__mic { grid-row: 1; grid-column: 1 / -1; justify-self: center;
+  width: 62px; height: 62px; border: 1px solid #7435dc; background: #251b32; color: var(--green); }
+.panel.is-voice .panel__mic svg { width: 24px; height: 26px; }
+.panel.is-voice .panel__chat .panel__mic.is-listening { border-color: var(--green); background: #183226;
+  box-shadow: 0 0 0 5px #31ff7212; }
+.panel.is-voice .panel__input { grid-row: 2; grid-column: 1 / -1; width: 100%; text-align: center;
+  border-color: transparent; background: transparent; padding-inline: 4px; font-family: var(--font-display); font-size: 14px; }
+.panel.is-voice .panel__input:focus { border-color: #7435dc55; background: #251b3240; }
+.panel.is-voice .panel__send { grid-row: 3; grid-column: 2; }
+.panel.is-voice .panel__typing { grid-row: 3; grid-column: 3; }
+.panel.is-voice .panel__chat[data-has-draft='false'] .panel__send { display: none; }
+.panel.is-voice .panel__chat[data-has-draft='false'] .panel__typing { grid-column: 2 / 4; justify-self: center; }
+.panel.is-voice .panel__dictation-status { text-align: center; margin-top: 10px; }
+.panel.is-chat.is-entering .panel__frame { animation: conversation-in 140ms ease-out both; }
+@keyframes conversation-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .panel.is-chat.is-entering .panel__frame { animation: none; } }
+
+.panel.is-voice .panel__mic.is-listening ~ .panel__send { visibility: hidden; }
+
+/* Calm exits for conversation cards; operational alerts retain their own motion. */
+.panel.is-chat.is-leaving .panel__plate { min-height: var(--closing-height, 0px); }
+.panel.is-chat.is-leaving .panel__frame { transform-origin: center bottom; clip-path: none;
+  animation: conversation-out 160ms cubic-bezier(.4,0,1,1) both; }
+.panel.is-chat.is-voice.is-leaving .panel__frame { animation: voice-out 180ms cubic-bezier(.4,0,1,1) both; }
+@keyframes conversation-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(7px) scale(.985); }
+}
+@keyframes voice-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(5px) scale(.95); }
 }

@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {Readable,Transform}=require('node:stream');
 const {pipeline}=require('node:stream/promises');
-const {unzipSync}=require('fflate');
+const {execFile}=require('node:child_process');
 
 // Official whisper.cpp build, multilingual large-v3-turbo and Silero VAD.
 const ASSETS=[
@@ -58,14 +58,13 @@ async function download(asset,dir,onProgress){
     await fs.promises.rename(part,target);
   }catch(error){await fs.promises.rm(part,{force:true});throw error;}
 }
-async function unpack(archive,bin){
-  const files=unzipSync(await fs.promises.readFile(archive));
-  for(const [name,bytes] of Object.entries(files)){
-    const target=path.resolve(bin,name.replace(/\\/g,'/'));
-    if(!target.startsWith(bin+path.sep))throw Error('speech-download-failed');
-    if(name.endsWith('/')){await fs.promises.mkdir(target,{recursive:true});continue;}
-    await fs.promises.mkdir(path.dirname(target),{recursive:true});await fs.promises.writeFile(target,bytes);
-  }
+// Extract the hash-verified runtime in a separate process, keeping large CUDA
+// archives out of the Electron main process's heap and event loop.
+async function unpack(archive,bin,{run=execFile,systemRoot=process.env.SystemRoot||'C:\\Windows'}={}){
+  await fs.promises.mkdir(bin,{recursive:true});
+  const tar=path.join(systemRoot,'System32','tar.exe');
+  await new Promise((resolve,reject)=>run(tar,['-xf',archive,'-C',bin],{windowsHide:true,timeout:15*60*1000},
+    error=>error?reject(Error('speech-download-failed')):resolve()));
 }
 async function ensureRuntime(root,onProgress,{gpu=false}={}){
   const ready=installed(root);if(ready&&(!gpu||ready.gpu))return ready;
@@ -80,4 +79,4 @@ async function ensureRuntime(root,onProgress,{gpu=false}={}){
   installs.set(root,work);
   try{return await work;}finally{installs.delete(root);}
 }
-module.exports={ensureRuntime,installed,ASSETS,CUDA,VERSION};
+module.exports={ensureRuntime,installed,unpack,ASSETS,CUDA,VERSION};

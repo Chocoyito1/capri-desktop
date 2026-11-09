@@ -1,0 +1,123 @@
+'use strict';
+
+const { DatabaseSync } = require('node:sqlite');
+const fs = require('node:fs');
+const path = require('node:path');
+const { fact } = require('./memory');
+const { permissions } = require('./pc-context');
+const { ProjectCompanion } = require('./project-companion');
+const { CompanionContinuity } = require('./companion-continuity');
+const { DailyReview } = require('./daily-review');
+const { ReusableRoutines } = require('./reusable-routines');
+
+// User-authored intentions, separate from speculative curiosity and task receipts.
+// A saved goal is context, never permission to execute or proof of progress.
+class CompanionGoals {
+  constructor({ file = ':memory:', settings = () => ({}), now = Date.now, choose, confirm } = {}) {
+    Object.assign(this, { settings, now });
+    if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
+    this.db = new DatabaseSync(file);
+    this.db.exec(`PRAGMA secure_delete=ON;
+      CREATE TABLE IF NOT EXISTS companion_goals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL,
+        next_step TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK(status IN ('active','paused','done')),
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);`);
+    if (!this.db.prepare('PRAGMA table_info(companion_goals)').all().some(row => row.name === 'project_id'))
+      this.db.exec('ALTER TABLE companion_goals ADD COLUMN project_id INTEGER');
+    this.projects = new ProjectCompanion({ db: this.db, settings, now, choose, confirm });
+    this.db.exec(`CREATE TABLE IF NOT EXISTS companion_project_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+      code TEXT NOT NULL CHECK(code IN ('still-blocked','unhelpful','repetitive','helpful')), created_at INTEGER NOT NULL);`);
+    this.continuity = new CompanionContinuity({ goals: this, settings, confirm });
+    this.reviews = new DailyReview({ goals: this, settings, now });
+    this.routines = new ReusableRoutines({ goals: this, settings, confirm, now });
+    this.prune();
+  }
+
+  prune() {
+    const days = permissions(this.settings().privacy).retentionDays;
+    if (days > 0) this.db.prepare('DELETE FROM companion_goals WHERE updated_at < ?')
+      .run(this.now() - days * 86_400_000);
+    this.projects.prune();
+    this.continuity?.pruneRecords();
+    this.reviews?.pruneRecords();
+    this.routines?.pruneRecords();
+    if (days > 0) this.db.prepare('DELETE FROM companion_project_feedback WHERE created_at<?').run(this.now() - days * 86400000);
+    this.db.exec(`DELETE FROM companion_project_feedback WHERE project_id NOT IN (SELECT id FROM companion_projects);
+      DELETE FROM companion_project_feedback WHERE id NOT IN (SELECT id FROM companion_project_feedback ORDER BY id DESC LIMIT 90)`);
+  }
+
+  list() {
+    this.prune();
+    return this.db.prepare('SELECT * FROM companion_goals ORDER BY updated_at DESC,id DESC LIMIT 100').all();
+  }
+
+  context() {
+    const cfg = this.settings(), p = permissions(cfg.privacy);
+    if (cfg.gamingMode || !p.memoryEnabled || !p.memoryRecall || !p.promptBudget) return [];
+    const result = [];
+    const scope = this.projects.scope();
+    for (const { id, text, next_step, updated_at, status, project_id } of this.list()) {
+      if (status !== 'active' || (project_id !== null && project_id !== scope)) continue;
+      const value = { id, text, next_step, updated_at, project_id,
+        note: 'User-saved intention; not evidence of progress or permission to act.' };
+      // Keep exact whole records, within the existing UTF-8 context allowance.
+      if (Buffer.byteLength(JSON.stringify([...result, value])) <= p.promptBudget) result.push(value);
+      if (result.length === 3) break;
+    }
+    return result;
+  }
+
+  route(text) {
+    const match = /^\/goals(?:\s+([\s\S]*))?$/i.exec(text.trim());
+    if (!match) return null;
+    const arg = (match[1] || 'list').trim();
+    const reply = text => ({ handled: true, text });
+    const help = 'Saved goals: /goals add <goal>; /goals next <id> <next step>; /goals pause|resume|done <id>; /goals delete <id>; /goals list; /goals export. Goals are saved locally, separately from personal memories. Memory settings control saving, recall and retention. Saving a goal never starts work.';
+    if (/^help$/i.test(arg)) return reply(help);
+    if (/^list$/i.test(arg)) {
+      const rows = this.list();
+      return reply(rows.length ? rows.map(row => `#${row.id} [${row.status}${row.project_id === null ? '; global' : `; project #${row.project_id}`}] ${row.text}${row.next_step ? `\nNext: ${row.next_step}` : ''}`).join('\n') : 'No saved goals. ' + help);
+    }
+    if (/^export$/i.test(arg)) return reply(JSON.stringify({ version: 1, goals: this.list() }, null, 2));
+    const remove = /^delete\s+#?(\d+)$/i.exec(arg);
+    if (remove) return reply(Number(this.db.prepare('DELETE FROM companion_goals WHERE id=?').run(Number(remove[1])).changes)
+      ? 'Goal deleted.' : 'Goal not found.');
+    const add = /^add\s+([\s\S]+)$/i.exec(arg);
+    const next = /^next\s+#?(\d+)\s+([\s\S]+)$/i.exec(arg);
+    const update = /^(pause|resume|done)\s+#?(\d+)$/i.exec(arg);
+    if (!add && !next && !update) return reply(help);
+    const cfg = this.settings();
+    if (cfg.gamingMode) return reply('Resume Capri before changing goals.');
+    if (!permissions(cfg.privacy).memoryEnabled) return reply('Enable Memory in the control room before saving goals. Listing, export and deletion remain available.');
+    this.prune();
+    const at = this.now();
+    if (add) {
+      const value = fact(add[1]);
+      const scope = this.projects.scope();
+      if (/[\x00-\x1f\x7f]/.test(value)) throw Error('Use a single line for a goal.');
+      const existing = this.db.prepare("SELECT id FROM companion_goals WHERE text=? AND project_id IS ? AND status!='done'").get(value, scope);
+      if (existing) return reply(`Goal already saved as #${existing.id}.`);
+      if (this.list().length >= 100) return reply('The goal list is full. Delete an old goal before adding another.');
+      const result = this.db.prepare("INSERT INTO companion_goals(text,status,created_at,updated_at,project_id) VALUES(?,'active',?,?,?)").run(value, at, at, scope);
+      return reply(`Saved goal #${result.lastInsertRowid}: ${value}`);
+    }
+    let result;
+    if (next) {
+      const value = fact(next[2]);
+      if (/[\x00-\x1f\x7f]/.test(value)) throw Error('Use a single line for a next step.');
+      result = this.db.prepare("UPDATE companion_goals SET next_step=?,updated_at=? WHERE id=? AND status!='done'")
+        .run(value, at, Number(next[1]));
+    } else {
+      const status = { pause: 'paused', resume: 'active', done: 'done' }[update[1].toLowerCase()];
+      result = this.db.prepare('UPDATE companion_goals SET status=?,updated_at=? WHERE id=?')
+        .run(status, at, Number(update[2]));
+    }
+    return reply(Number(result.changes) ? 'Goal updated.' : 'Matching goal not found.');
+  }
+
+  close() { this.db.close(); }
+}
+
+module.exports = { CompanionGoals };

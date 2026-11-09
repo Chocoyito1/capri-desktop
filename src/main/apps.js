@@ -45,7 +45,9 @@ async function close(name, { force = false } = {}) {
   if (force) native.forceClose(app.ids, app.name);
   else native.requestClose(app.handles);
   await new Promise(resolve => setTimeout(resolve, force ? 600 : 2500));
-  return { running: native.processRows().some(row => row.name === app.name) };
+  // Background helpers with the same name do not keep the original window open.
+  const alive = new Set(native.processRows().filter(row => row.name === app.name).map(row => row.id));
+  return { running: app.ids.some(id => alive.has(id)) };
 }
 
 module.exports = { list, find, close };

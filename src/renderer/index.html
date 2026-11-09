@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; media-src 'self' capri: blob:; connect-src 'self' capri:">
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; media-src 'self' capri: blob:; connect-src 'self' capri:">
   <title>Capri</title>
   <link rel="stylesheet" href="styles/capri.css">
 </head>
@@ -16,6 +16,23 @@
 
   <canvas id="chip" class="chip" hidden aria-label="Capri’s biochip"></canvas>
   <canvas id="mask" class="chip" hidden aria-label="Capri, asleep"></canvas>
+
+  <button id="wake-indicator" class="wake-indicator" type="button" hidden aria-pressed="false" aria-live="polite">Hey Capri: starting</button>
+  <button id="voice-indicator" class="voice-indicator" type="button" hidden aria-label="Voice conversation" title="End voice conversation">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
+  </button>
+
+  <nav id="talk-menu" class="talk-menu" hidden aria-label="Talk to Capri">
+    <p class="talk-menu__hello" aria-live="polite"></p>
+    <div class="talk-menu__choices">
+      <button type="button" data-talk="text" aria-label="Text chat" title="Text chat">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>
+      </button>
+      <button type="button" data-talk="voice" aria-label="Talk by voice" title="Talk by voice">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
+      </button>
+    </div>
+  </nav>
 
   <aside id="panel" class="panel" data-kind="info" hidden aria-live="polite">
     <div class="panel__frame">
@@ -38,15 +55,18 @@
           <ol class="panel__log" hidden></ol>
           <div class="panel__actions" hidden></div>
           <form class="panel__chat" hidden autocomplete="off">
-            <input class="panel__input" type="text" maxlength="500" spellcheck="false">
+            <textarea class="panel__input" rows="1" maxlength="500" spellcheck="false" wrap="soft" title="Enter to send · Shift+Enter for a new line"></textarea>
             <button class="panel__action panel__mic" type="button" aria-label="Dictate with your default microphone" aria-pressed="false">
               <svg width="16" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                 <rect x="9" y="2" width="6" height="12" rx="3"/>
                 <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>
               </svg>
             </button>
+            <button class="panel__action panel__typing" type="button" hidden aria-label="Switch to typing" title="Switch to typing">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h1m4 0h1m4 0h1M6 12h1m4 0h1m4 0h1M7 16h10" stroke-linecap="round"/></svg>
+            </button>
             <button class="panel__action is-primary panel__send" type="submit"></button>
-            <button class="panel__action panel__close" type="button">✕</button>
+            <button class="panel__action panel__close" type="button" aria-label="Close conversation"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
           </form>
           <p class="panel__dictation-status" hidden role="status" aria-live="polite"></p>
           <p class="panel__note" hidden></p>

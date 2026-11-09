@@ -1,3 +1,5 @@
+import { validateAtlas, CelPlayback, selectCelClip } from './sprite-clips.js';
+
 // WebGL renderer for the Capri cut-out.
 // One texture, one quad: every bit of life (head tilt, mane sway and flare, both arms, sitting with
 // dangling legs, smear frames, afterimages, line boil, speckles, the violet misregistration, glitch
@@ -19,6 +21,9 @@ precision highp float;
 varying vec2 vPx;
 
 uniform sampler2D uTex;
+uniform float uFrameMode;
+uniform vec4 uFrameRect;
+uniform vec2 uAtlasSize;
 uniform vec2 uSize;
 uniform float uSeed;
 uniform float uBoil;
@@ -261,6 +266,14 @@ vec2 settle(vec2 p) {
 
 void main() {
   vec2 p = vPx;
+  // Full drawings bypass all cutout deformation and grading.
+  if (uFrameMode > 0.5) {
+    if (p.x < 0.0 || p.y < 0.0 || p.x >= uSize.x || p.y >= uSize.y) discard;
+    vec2 uv = (uFrameRect.xy + p / uSize * uFrameRect.zw) / uAtlasSize;
+    vec4 c = texture2D(uTex, uv);
+    gl_FragColor = vec4(c.rgb * c.a, c.a) * uAlpha;
+    return;
+  }
 
   if (uDissolve > 0.0) {
     vec2 g = rot(p, vec2(110.0, 210.0), 0.55);
@@ -313,7 +326,7 @@ void main() {
 }`;
 
 const UNIFORMS = [
-  'uView', 'uPad', 'uTex', 'uSize', 'uSeed', 'uBoil', 'uHair', 'uHead', 'uMane', 'uArmL', 'uArmR', 'uLongL', 'uLongR',
+  'uFrameMode', 'uFrameRect', 'uAtlasSize', 'uView', 'uPad', 'uTex', 'uSize', 'uSeed', 'uBoil', 'uHair', 'uHead', 'uMane', 'uArmL', 'uArmR', 'uLongL', 'uLongR',
   'uSit', 'uKickL', 'uKickR',
   'uSmear', 'uEcho', 'uGlitch', 'uGlitchSeed',
   'uSplit', 'uCollapse', 'uDissolve', 'uSparkle', 'uGrade', 'uSil', 'uMisreg', 'uRim', 'uAlpha', 'uPx',
@@ -337,7 +350,8 @@ export const SPRITE = {
 };
 
 export class SpriteRenderer {
-  constructor(canvas, image) {
+  constructor(canvas, image, { previewCelArt = false } = {}) {
+    this.previewCelArt = previewCelArt;
     this.canvas = canvas;
     const gl = canvas.getContext('webgl', { premultipliedAlpha: true, alpha: true, antialias: false });
     if (!gl) throw new Error('WebGL unavailable');
@@ -366,6 +380,7 @@ export class SpriteRenderer {
     for (const name of UNIFORMS) this.u[name] = gl.getUniformLocation(prog, name);
 
     const tex = gl.createTexture();
+    this.rigTexture = tex;
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
@@ -379,6 +394,12 @@ export class SpriteRenderer {
     gl.uniform1f(this.u.uPad, SPRITE.pad);
     gl.uniform2f(this.u.uView, SPRITE.width + SPRITE.pad * 2, SPRITE.height + SPRITE.pad * 2);
     gl.clearColor(0, 0, 0, 0);
+    this.celPlayback = new CelPlayback();
+    // Original artwork stays the default; generated candidates are preview-only.
+    this.framesReady = previewCelArt ? this.loadFrames().catch(error => {
+      console.warn('Capri cel assets unavailable; using original rig:', error.message);
+      return false;
+    }) : Promise.resolve(false);
   }
 
   // css size of the canvas for a given sprite scale
@@ -400,9 +421,60 @@ export class SpriteRenderer {
     this.gl.uniform1f(this.u.uPx, 1 / (scale * dpr));
   }
 
-  draw(s) {
+  async loadFrames() {
+    const url = new URL('../../../assets/capri/animation-v2/atlas.json', import.meta.url);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Atlas manifest could not be loaded');
+    const atlas = await response.json();
+    const image = new Image(); image.src = new URL(atlas.image, url).href;
+    await image.decode();
+    validateAtlas(atlas, image.naturalWidth, image.naturalHeight);
+    const masks = document.createElement('canvas');
+    masks.width = image.width; masks.height = image.height;
+    const ctx = masks.getContext('2d', {willReadFrequently:true});
+    ctx.drawImage(image, 0, 0);
+    const pixels = ctx.getImageData(0, 0, image.width, image.height).data;
+    const {gl} = this;
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.cels = {atlas, texture, pixels};
+    return true;
+  }
+
+  frameFor(pet, now, still = false) {
+    if (!this.previewCelArt || !this.cels) return null;
+    const name = selectCelClip(pet);
+    if (!name) { this.celPlayback.reset(); return null; }
+    const player = pet.act?.player;
+    return this.celPlayback.sample(this.cels.atlas, name, player || pet.base, now, {
+      still: still || (!player && pet.companion?.options.idleAnimations === false),
+      startAt: player?.start,
+      durationMs: player ? player.total * 1000 / (player.act.fps || 12) : undefined,
+    });
+  }
+
+  hitFrame(frame, x, y) {
+    const {atlas, pixels} = this.cels;
+    if (x < 0 || y < 0 || x >= 240 || y >= 420) return false;
+    const px = frame.rect[0] + Math.floor(x);
+    const py = frame.rect[1] + Math.floor(y);
+    return pixels[(py * atlas.width + px) * 4 + 3] > 40;
+  }
+
+  draw(s, frame = null) {
     const { gl, u } = this;
     gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindTexture(gl.TEXTURE_2D, frame ? this.cels.texture : this.rigTexture);
+    gl.uniform1f(u.uFrameMode, frame ? 1 : 0);
+    if (frame) {
+      gl.uniform4f(u.uFrameRect, ...frame.rect);
+      gl.uniform2f(u.uAtlasSize, this.cels.atlas.width, this.cels.atlas.height);
+    }
     gl.uniform1f(u.uSeed, s.seed);
     gl.uniform1f(u.uBoil, s.boil);
     gl.uniform1f(u.uHair, s.hair);

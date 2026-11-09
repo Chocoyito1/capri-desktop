@@ -8,22 +8,22 @@
   <link rel="stylesheet" href="styles/settings.css">
 </head>
 <body class="settings-body">
-  <header class="titlebar"><span class="wordmark">CAPRI<span class="wordmark__suffix">GPT</span></span><span class="titlebar__label">PERSONAL CONTROL ROOM</span><button id="close" aria-label="Close settings">✕</button></header>
+  <header class="titlebar"><span class="wordmark">CAPRI<span class="wordmark__suffix">GPT</span></span><span class="titlebar__label">YOUR SPACE</span><button id="close" type="button" aria-label="Close settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header>
   <div class="shell">
     <aside class="rail">
-      <div class="identity"><img src="../../assets/capri/capri-face.png" alt="Capri"><div><strong>Your digital ghost.</strong><span><i></i> LOCAL BY DESIGN</span></div></div>
+      <div class="identity"><img src="../../assets/capri/capri-face.png" alt="Capri"><div><strong>Your digital ghost.</strong><span><i></i> HERE WITH YOU</span></div></div>
       <nav aria-label="Settings sections">
-        <button data-page="home" class="selected"><span>01</span>Overview</button>
-        <button data-page="appearance"><span>02</span>Appearance</button>
-        <button data-page="sound"><span>03</span>Sound</button>
-        <button data-page="memory"><span>04</span>Memory</button>
-        <button data-page="awareness"><span>05</span>PC awareness</button>
-        <button data-page="connections"><span>06</span>Connections</button>
-        <button data-page="updates"><span>07</span>Updates & app</button>
+        <button data-page="home" class="selected"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg></span>Overview</button>
+        <button data-page="appearance"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></span>Appearance</button>
+        <button data-page="sound"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg></span>Sound</button>
+        <button data-page="memory"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 2v4m6-4v4M9 11h6m-6 4h4"/></svg></span>Memory</button>
+        <button data-page="awareness"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span>PC awareness</button>
+        <button data-page="connections"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 15 6-6m-6-2 2-2a5 5 0 0 1 7 7l-2 2m-7-4-3 3a5 5 0 0 0 7 7l2-2"/></svg></span>Connections</button>
+        <button data-page="updates"><span class="nav-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/></svg></span>Updates & app</button>
       </nav>
-      <div class="rail__footer"><span id="version">CAPRI</span><button class="quit" data-action="quit">Quit Capri <span>↗</span></button></div>
+      <div class="rail__footer"><span id="version">CAPRI</span><button class="quit" data-action="quit">Quit Capri <span aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v10M6 5a9 9 0 1 0 12 0"/></svg></span></button></div>
     </aside>
-    <main id="content" tabindex="-1"></main>
+    <main id="content" tabindex="-1" aria-labelledby="settings-title"></main>
   </div>
   <footer class="statusbar"><span><i></i> Changes save automatically</span><span id="notice" role="status" aria-live="polite">Make yourself at home, choom.</span></footer>
   <script type="module" src="js/settings.js"></script>
